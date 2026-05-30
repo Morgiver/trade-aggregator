@@ -7,9 +7,10 @@
 
 Une **librairie (crate) Rust** capable d'**agréger des trades en temps réel** sous
 différentes formes **périodiques**, où une « période » peut être définie par des
-natures variées de données. Trois piliers fonctionnels au-delà de l'agrégation brute :
-**order flow** complet, **TPO** (Time Price Opportunity), et un **support
-programmatique d'indicateurs** branché sur les données agrégées.
+natures variées de données. Deux piliers fonctionnels + un pilier d'extensibilité :
+**order flow** complet, **TPO** (Time Price Opportunity), et un **point d'extension
+réactif** permettant à n'importe qui de brancher SES calculs temps réel sur les données
+agrégées (le layer d'indicateurs lui-même = un autre projet).
 
 ## Features en vrac
 
@@ -25,11 +26,15 @@ programmatique d'indicateurs** branché sur les données agrégées.
   (tick/volume/dollar), *run bars*. → aucune impl Rust trouvée = carte de
   différenciation.
 - **Hybrides** : barres composites (ex. temps **ou** volume, le premier atteint).
+- **(à explorer)** périodes définies par des **événements d'orderbook** (cf. question
+  ouverte sur le book).
 
 ### Order flow (dans les périodes, quel que soit leur type)
 - **Footprint** : volume **bid vs ask par niveau de prix** dans la barre.
 - Dérivés : *delta*, *cumulative delta (CVD)*, *POC*, *Value Area (VAH/VAL)*,
   imbalances diagonales.
+- **Avec orderbook** (selon scope retenu) : absorption, détection icebergs/refills,
+  liquidité au POC, book imbalance, profondeur au moment des trades.
 
 ### TPO / Market Profile
 - Distribution du **temps** passé à chaque prix (lettres TPO), *Value Area 70 %*,
@@ -37,47 +42,44 @@ programmatique d'indicateurs** branché sur les données agrégées.
 - Footprint = lentille **volume** ; TPO = lentille **temps** → complémentaires sur la
   même période.
 
-### Layer d'indicateurs programmatique
-- Brancher des méthodes qui consomment les données agrégées pour calculer des
-  indicateurs techniques. Mécanisme : callbacks, events, channel — à décider.
+### Point d'extension réactif (ex-« layer d'indicateurs », reformulé)
+- Fournir tout ce qu'il faut pour brancher des calculs temps réel **externes** sur les
+  données agrégées. La crate expose ; elle ne calcule pas d'indicateurs.
+- **Axe 1 — push/pull** : callbacks (`FnMut`), trait observer (`OnBar`/`Subscriber`),
+  channels (`mpsc`/`crossbeam`/`tokio::broadcast`) ; `Iterator`/`Stream` ; état
+  interrogeable (snapshot pull).
+- **Axe 2 — granularité** : `on_bar_close` ET `on_bar_update` (barre en formation).
+- **Axe perf** : cœur générique monomorphisé (zero-cost) vs `Box<dyn>`. Reco : un point
+  d'extension unique (trait `Sink`/`Observer`) + adaptateurs (channel, `Stream`).
+- Autres : fan-out multi-subscribers ; mode *tee* (live + enregistrement).
 
-## Recherche & inspirations
+## Entrée de données
 
-### Prior art direct (⚠️ socle déjà existant)
-- **[`trade_aggregation`](https://docs.rs/trade_aggregation)** : fait DÉJÀ le socle —
-  trait `AggregationRule` (`TimeRule`, `AlignedTimeRule`, `VolumeRule`, `TickRule`,
-  `RelativePriceRule`/Renko), `ModularCandle` + `CandleComponent`, low-latency /
-  incrémental. → repositionner trade-aggregator sur ce qu'il N'A PAS (order flow riche,
-  TPO, imbalance bars, indicateurs). 3 options : s'appuyer dessus / s'en inspirer et
-  réécrire un socle plus ambitieux / le dépasser comme référence.
+- **Sources** : **DataBento** (crate Rust officielle [`dbn`](https://docs.rs/dbn/) —
+  schémas **MBO** = orderbook complet, **Trades** = tape avec **aggressor side**
+  Ask/Bid/None, MBP-1/10, TBBO) **ou** exchanges crypto fournissant orderbook + tape
+  complets (Bybit, Binance `aggTrade.m`, Coinbase).
+- **Côté agresseur** : fourni par les sources → inférence (Lee-Ready) reléguée à un
+  *fallback* pour les cas `None`.
+- **Live + replay** : même API. Pattern = `process(event)` sur des **événements
+  horodatés** ; le temps vient des données (event-time) → déterministe, testable. Le
+  dataset DataBento de Morgan = golden dataset des tests.
 
-### Layer indicateurs incrémental (réutiliser ou s'inspirer)
-- **[`yata`](https://github.com/amv-dev/yata)** : TA library, support candles, trait
-  pour créer ses indicateurs.
-- **[`kand`](https://github.com/kand-ta/kand)** : O(1) incrémental, VWAP, Supertrend.
-- **[`mantis-ta`](https://crates.io/crates/mantis-ta)** : O(1), **zéro allocation dans
-  le hot path** — esprit low-latency.
-- `ta`, `rsta` : indicateurs classiques.
+## Non-goals
 
-### Concepts / références théoriques
-- Imbalance & run bars : López de Prado, *Advances in Financial Machine Learning*
-  (2018), ch. 2. Réf. d'implémentation Python : `mlfinlab` / `mlfinpy`.
-- Footprint / delta / CVD / Market Profile (Steidlmayer) : vocabulaire à fixer en Phase
-  Domaine.
-- Inférence du côté agresseur sans flag : tick rule / quote rule (Lee-Ready).
-
-## Non-goals (pressentis, à confirmer)
-
-- _Pressenti :_ pas de connecteurs exchange / websocket — la crate consomme un **flux
-  de trades normalisé** en entrée (à confirmer avec Morgan).
+- **Pas** de couche layer d'indicateurs (= autre projet).
+- **Pas** de connecteurs exchange / websocket / REST (réseau, auth, reconnection).
+- **Pas** de réutilisation ni d'inspiration de `trade_aggregation` ni des crates TA
+  existantes (yata/kand/mantis-ta) — on fait à notre manière.
 
 ## Questions ouvertes
 
-1. **Positionnement vs `trade_aggregation`** : dépendre / réécrire / dépasser ?
-2. **Donnée d'entrée minimale** : `Trade { ts, price, size, side? }` ? `side` optionnel
-   + inféreur (Lee-Ready) ? — conditionne toute la couche order flow.
-3. **Frontière du scope** : connecteurs exchange dedans ou dehors ?
-4. **Temps réel vs replay** : même API pour live + rejeu d'historique ?
-5. **Multi-symboles** : une instance = un instrument, ou N flux gérés ?
-6. **Indicateurs** : réutiliser yata/kand/mantis-ta, ou trait `Indicator` maison ?
-   Branchement par callbacks / events / channel ?
+1. **Rôle de l'orderbook complet** : (a) enrichir l'order flow des barres de trades,
+   (b) objet de premier plan qu'on agrège/profile aussi (voire familles d'agrégation
+   basées book), ou les deux ? → **question structurante**.
+2. **Normaliseurs vs trait d'entrée** : la crate fournit-elle des adapters de format
+   (DataBento via `dbn`, schémas Binance/Bybit/Coinbase) vers un modèle interne unifié,
+   ou juste un trait d'entrée que l'utilisateur mappe ? (réseau exclu dans tous les cas)
+3. **Mono vs multi-symboles** : reco = brique `Aggregator` mono-instrument composable en
+   multi (un par symbole) plutôt qu'un cœur multi monolithique. À valider.
+4. **Mécanisme d'exposition** : point d'extension unique + adaptateurs — à confirmer.
