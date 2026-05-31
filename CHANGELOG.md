@@ -15,4 +15,7 @@ On consigne les **changements notables** (fin de phase, tranche réalisée, déc
   Issue #2 close.
 - **Phase 3 — Domaine** : `docs/domain/` (glossaire EN/FR + concepts & relations
   Mermaid). Vocabulaire stable. Issue #3 close.
-- Démarrage de la **Phase 4 — Architecture** (issue #4).
+- **Phase 4 — Architecture** : `docs/architecture/` complète (descente C4 : racine,
+  canonical, symbol-aggregator, aggressor/orderflow, passive, extension, transverse).
+  Chaque feature a un toit. Issue #4 close.
+- Démarrage de la **Phase 5 — Structuration** (issue #5).

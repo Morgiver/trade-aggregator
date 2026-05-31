@@ -24,3 +24,26 @@
 - Les **adapters par venue** (Binance/Bybit/Coinbase) sont **hors scope** : ils
   produiraient ce `MarketEvent` depuis l'extérieur (projet compagnon).
 - Aucune logique d'agrégation ici : juste le **vocabulaire d'entrée** typé.
+
+---
+
+## Fiches features (Phase 5)
+
+> Atomisation des features du thème A ([`../vision/features.md`](../vision/features.md))
+> rattachées à ce nœud. `ID · priorité · critère`.
+
+### `CAN-1` — Modèle `MarketEvent` · **P0**
+Type horodaté `Trade | BookUpdate` couvrant tape et book.
+**Critère** : un flux DataBento se décode en une séquence de `MarketEvent` sans perte.
+
+### `CAN-2` — `Instrument` definition · **P0**
+Tick size, price increment, lot/contract size, multiplicateur, devise.
+**Critère** : les prix d'un symbole se calent sur son tick size ; le notional est calculable.
+
+### `CAN-3` — `Granularity` (L1/L2/L3) + capacités · **P0**
+Déclarée à la construction ; expose les agrégations possibles.
+**Critère** : demander une agrégation non supportée par la granularité → erreur typée.
+
+### `CAN-4` — Mapping DataBento (`dbn`) · **P0** (trades) / **P1** (book)
+Module isolé/feature-gated ; `Ask/Bid` agresseur → `AggressorSide::Sell/Buy`.
+**Critère** : la crate compile sans la feature `databento` ; avec, un fichier DBN se mappe.
