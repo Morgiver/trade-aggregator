@@ -29,5 +29,6 @@ pub use error::ConfigError;
 pub use extension::Subscriber;
 pub use orderflow::{BarComponent, Cvd, Delta, Footprint, VolumeProfile};
 pub use period::{
-    AlignedTimePeriod, Boundary, DollarPeriod, Period, TickPeriod, TimePeriod, VolumePeriod,
+    AlignedTimePeriod, Boundary, DollarPeriod, Period, RangePeriod, RenkoPeriod, TickPeriod,
+    TimePeriod, VolumePeriod,
 };

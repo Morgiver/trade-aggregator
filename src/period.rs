@@ -1,6 +1,6 @@
 //! La `Period` : règle qui décide quand une `Bar` se ferme (fiches `AGG-P0`, `AGG-P1`).
 
-use crate::canonical::{Granularity, Qty, Trade, Ts};
+use crate::canonical::{Granularity, Px, Qty, Trade, Ts};
 
 /// Résultat de l'examen d'un trade par une `Period`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -262,6 +262,104 @@ impl Period for DollarPeriod {
     }
 }
 
+/// Barres de **range de prix** (fiche `AGG-P7`) : l'amplitude `high − low` d'une barre
+/// reste ≤ `range`. Le trade qui ferait dépasser le range ouvre une nouvelle barre.
+pub struct RangePeriod {
+    range: i64,
+    lo: Px,
+    hi: Px,
+    open: bool,
+}
+
+impl RangePeriod {
+    pub fn new(range: i64) -> Self {
+        assert!(range > 0, "range doit être > 0");
+        RangePeriod {
+            range,
+            lo: 0,
+            hi: 0,
+            open: false,
+        }
+    }
+}
+
+impl Period for RangePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open {
+            self.open = true;
+            self.lo = t.price;
+            self.hi = t.price;
+            return Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            };
+        }
+        let new_hi = self.hi.max(t.price);
+        let new_lo = self.lo.min(t.price);
+        if new_hi - new_lo > self.range {
+            // Le trade dépasse le range → il ouvre une nouvelle barre.
+            self.lo = t.price;
+            self.hi = t.price;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.hi = new_hi;
+            self.lo = new_lo;
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("range:{}", self.range)
+    }
+}
+
+/// Barres **Renko** simplifiées (fiche `AGG-P8`) : nouvelle brique quand le prix s'écarte
+/// d'au moins `brick` du prix d'ouverture de la barre courante.
+///
+/// *Note* : version simplifiée (référence = prix d'ouverture de la barre), à affiner
+/// ultérieurement (grille de briques, multi-briques par saut) si le besoin émerge.
+pub struct RenkoPeriod {
+    brick: i64,
+    reference: Px,
+    open: bool,
+}
+
+impl RenkoPeriod {
+    pub fn new(brick: i64) -> Self {
+        assert!(brick > 0, "brick doit être > 0");
+        RenkoPeriod {
+            brick,
+            reference: 0,
+            open: false,
+        }
+    }
+}
+
+impl Period for RenkoPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || (t.price - self.reference).abs() >= self.brick {
+            self.open = true;
+            self.reference = t.price;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("renko:{}", self.brick)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -358,5 +456,25 @@ mod tests {
         assert!(!closes(p.on_trade(&trv(1, 100, 5)))); // 900
         assert!(!closes(p.on_trade(&trv(2, 100, 2)))); // 1100 ≥ 1000
         assert!(closes(p.on_trade(&trv(3, 100, 1)))); // suivant → ferme/ouvre
+    }
+
+    // AGG-P7 : barres de range (amplitude ≤ range).
+    #[test]
+    fn range_period_closes_when_span_exceeds_range() {
+        let mut p = RangePeriod::new(5);
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ouvre, lo=hi=100
+        assert!(!closes(p.on_trade(&trv(1, 103, 1)))); // span 3 ≤ 5
+        assert!(!closes(p.on_trade(&trv(2, 105, 1)))); // span 5 ≤ 5
+        assert!(closes(p.on_trade(&trv(3, 106, 1)))); // span 6 > 5 → nouvelle barre
+    }
+
+    // AGG-P8 : barres Renko (écart ≥ brick depuis l'ouverture).
+    #[test]
+    fn renko_period_closes_on_brick_move() {
+        let mut p = RenkoPeriod::new(10);
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ref=100
+        assert!(!closes(p.on_trade(&trv(1, 105, 1)))); // |+5| < 10
+        assert!(closes(p.on_trade(&trv(2, 110, 1)))); // |+10| ≥ 10 → nouvelle brique
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // |−10| ≥ 10 → nouvelle brique
     }
 }

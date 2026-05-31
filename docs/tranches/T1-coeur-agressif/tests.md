@@ -12,5 +12,13 @@
 - **`UC-T1-6`** Delta (U) — `Σ Buy − Σ Sell` (ex. Buy 3 + Sell 5 → −2) ; `Unknown` compte 0.
 - **`UC-T1-7`** CVD (U) — cumul des deltas de barres successives (ex. −2 puis +5 → −2 puis 3).
 
-## Lot B — Périodes *(à détailler au lot B)*
+## Lot B — Périodes
+
+- **`UC-T1-13`** AlignedTime (U) — fenêtres alignées sur l'horloge ; première barre **partielle** si démarrage en cours de fenêtre (`AGG-B5`).
+- **`UC-T1-8`** Tick (U) — `n` trades par barre (ferme à l'arrivée du (n+1)ᵉ).
+- **`UC-T1-9`** Volume (U) — ferme dès volume cumulé ≥ seuil (trade de franchissement inclus).
+- **`UC-T1-10`** Dollar (U) — idem sur `Σ price·size`.
+- **`UC-T1-11`** Range (U) — amplitude `high−low` ≤ range ; le trade qui dépasse ouvre une barre.
+- **`UC-T1-12`** Renko (U) — nouvelle brique quand `|price − open| ≥ brick`.
+
 ## Lot C — Extension *(à détailler au lot C)*
