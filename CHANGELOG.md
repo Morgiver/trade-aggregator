@@ -12,3 +12,5 @@ On consigne les **changements notables** (fin de phase, tranche réalisée, déc
   agrégation-vs-interprétation, live+replay event-time). Issue #1 close.
 - **Phase 2 — Vision** : `docs/vision/` complet (produit, positionnement, 5 piliers,
   scope IN/OUT, features priorisées P0→P3, tranches macro T0→T4, risques & questions).
+  Issue #2 close.
+- Démarrage de la **Phase 3 — Domaine** (issue #3).
