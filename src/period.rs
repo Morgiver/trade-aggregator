@@ -8,7 +8,9 @@ pub enum Boundary {
     /// Le trade appartient à la barre courante.
     Continue,
     /// Le trade ouvre une nouvelle barre `[start, end)` : fermer la courante d'abord.
-    CloseAndOpen { start: Ts, end: Ts },
+    /// `partial` = la nouvelle barre démarre incomplète (entrée en cours de fenêtre,
+    /// fiche `AGG-B5`).
+    CloseAndOpen { start: Ts, end: Ts, partial: bool },
 }
 
 /// Contrat commun des règles de période (fiche `AGG-P0`).
@@ -64,6 +66,7 @@ impl Period for TimePeriod {
                 Boundary::CloseAndOpen {
                     start: end - self.interval_ns,
                     end,
+                    partial: false,
                 }
             }
             Some(base) => {
@@ -73,7 +76,11 @@ impl Period for TimePeriod {
                     let end = self.window_end_for(base, t.ts);
                     let start = end - self.interval_ns;
                     self.current_end = end;
-                    Boundary::CloseAndOpen { start, end }
+                    Boundary::CloseAndOpen {
+                        start,
+                        end,
+                        partial: false,
+                    }
                 }
             }
         }
@@ -81,5 +88,115 @@ impl Period for TimePeriod {
 
     fn label(&self) -> String {
         format!("time:{}ns", self.interval_ns)
+    }
+}
+
+/// Barres temporelles **alignées sur l'horloge** : fenêtres
+/// `[k·interval, (k+1)·interval)` (multiples de l'epoch), fiche `AGG-P2`.
+///
+/// La **première** barre est marquée *partielle* (`AGG-B5`) si le flux démarre en cours
+/// de fenêtre (premier trade non aligné sur une borne).
+pub struct AlignedTimePeriod {
+    interval_ns: i64,
+    current_end: Option<Ts>,
+}
+
+impl AlignedTimePeriod {
+    pub fn new(interval_ns: i64) -> Self {
+        assert!(interval_ns > 0, "interval_ns doit être > 0");
+        AlignedTimePeriod {
+            interval_ns,
+            current_end: None,
+        }
+    }
+
+    fn window(&self, ts: Ts) -> (Ts, Ts) {
+        let start = ts.div_euclid(self.interval_ns) * self.interval_ns;
+        (start, start + self.interval_ns)
+    }
+}
+
+impl Period for AlignedTimePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        let (start, end) = self.window(t.ts);
+        match self.current_end {
+            None => {
+                self.current_end = Some(end);
+                // Partielle si le flux n'a pas démarré pile sur la borne de fenêtre.
+                Boundary::CloseAndOpen {
+                    start,
+                    end,
+                    partial: t.ts != start,
+                }
+            }
+            Some(ce) if t.ts < ce => Boundary::Continue,
+            Some(_) => {
+                self.current_end = Some(end);
+                Boundary::CloseAndOpen {
+                    start,
+                    end,
+                    partial: false,
+                }
+            }
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("aligned-time:{}ns", self.interval_ns)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canonical::AggressorSide;
+
+    fn tr(ts: Ts) -> Trade {
+        Trade {
+            ts,
+            price: 100,
+            size: 1,
+            aggressor: AggressorSide::Buy,
+            instrument_id: 1,
+        }
+    }
+
+    // AGG-P2 + AGG-B5 : fenêtres alignées sur l'horloge, première barre partielle.
+    #[test]
+    fn aligned_time_period_windows_and_partial_first_bar() {
+        let mut p = AlignedTimePeriod::new(100);
+        // Premier trade à ts=150 → fenêtre [100,200), barre partielle (démarrage en cours).
+        assert_eq!(
+            p.on_trade(&tr(150)),
+            Boundary::CloseAndOpen {
+                start: 100,
+                end: 200,
+                partial: true
+            }
+        );
+        // ts=180 reste dans la fenêtre.
+        assert_eq!(p.on_trade(&tr(180)), Boundary::Continue);
+        // ts=230 → nouvelle fenêtre [200,300), complète.
+        assert_eq!(
+            p.on_trade(&tr(230)),
+            Boundary::CloseAndOpen {
+                start: 200,
+                end: 300,
+                partial: false
+            }
+        );
+    }
+
+    #[test]
+    fn aligned_first_bar_on_boundary_is_not_partial() {
+        let mut p = AlignedTimePeriod::new(100);
+        assert_eq!(
+            p.on_trade(&tr(200)),
+            Boundary::CloseAndOpen {
+                start: 200,
+                end: 300,
+                partial: false
+            }
+        );
     }
 }

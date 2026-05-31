@@ -166,7 +166,11 @@ impl SymbolAggregator {
                         lens.on_trade(t);
                     }
                 }
-                Boundary::CloseAndOpen { start, end } => {
+                Boundary::CloseAndOpen {
+                    start,
+                    end,
+                    partial,
+                } => {
                     if slot.current.is_some() {
                         let of = slot.snapshot_orderflow();
                         let mut bar = slot.current.take().unwrap();
@@ -176,7 +180,7 @@ impl SymbolAggregator {
                     // Ouvre la nouvelle barre et ses lentilles fraîches.
                     slot.lenses = slot.fresh_lenses();
                     let mut bar = Bar::open(start, end, t);
-                    bar.partial = false;
+                    bar.partial = partial;
                     for lens in &mut slot.lenses {
                         lens.on_trade(t);
                     }

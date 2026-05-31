@@ -28,4 +28,4 @@ pub use canonical::{AggressorSide, Granularity, Instrument, MarketEvent, Px, Qty
 pub use error::ConfigError;
 pub use extension::Subscriber;
 pub use orderflow::{BarComponent, Cvd, Delta, Footprint, VolumeProfile};
-pub use period::{Boundary, Period, TimePeriod};
+pub use period::{AlignedTimePeriod, Boundary, Period, TimePeriod};
