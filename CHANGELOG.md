@@ -18,4 +18,6 @@ On consigne les **changements notables** (fin de phase, tranche réalisée, déc
 - **Phase 4 — Architecture** : `docs/architecture/` complète (descente C4 : racine,
   canonical, symbol-aggregator, aggressor/orderflow, passive, extension, transverse).
   Chaque feature a un toit. Issue #4 close.
-- Démarrage de la **Phase 5 — Structuration** (issue #5).
+- **Phase 5 — Structuration** : 98 fiches atomiques co-localisées dans
+  `docs/architecture/` (aucune feature orpheline). Issue #5 close.
+- Démarrage de la **Phase 6 — Priorisation** (issue #6).
