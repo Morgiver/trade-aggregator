@@ -3,6 +3,29 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 On consigne les **changements notables** (fin de phase, tranche réalisée, décision/ADR, breaking) — pas chaque commit.
 
+## [0.1.0] — 2026-05-31
+
+Première version fonctionnelle de bout en bout — **roadmap (T0→T4) épuisée**.
+
+### Phase 7 — Réalisation (tranches)
+- **T0 — Walking skeleton** : `trades → barres temporelles → on_bar_close`, en replay.
+- **T1 — Cœur agressif** : order flow (Footprint, Delta/CVD, VolumeProfile→POC/Value Area),
+  périodes (Time/Aligned/Tick/Volume/Dollar/Range/Renko), point d'extension
+  (`on_bar_update`, `ChannelSink`, `FnSubscriber`).
+- **T2 — Côté passif** : reconstruction du carnet (`OrderBook` L2), `LiquidityProfile`
+  périodique (churn, pondéré-temps, déséquilibre, snapshots), mapping DataBento MBP-10
+  (validé sur NQ réel).
+- **T3 — Différenciation** : imbalance bars (tick/volume/dollar), run bars, TPO/Market
+  Profile (POC temps, Value Area, single prints, Initial Balance), Point & Figure,
+  détection de désordre temporel.
+- **T4 — Robustesse & perf** : reconstruction L3→L2 fidèle (`MboBook`), bornes mémoire
+  (`prune_to_depth`), benchmark hot path (~23 M trades/s).
+
+### Périmètre
+Crate Rust (édition 2024), agrégation déterministe (live = replay, event-time), côté
+agressif + passif, mapping **DataBento** isolé derrière la feature `databento`. ~42 tests.
+Non-goals tenus : pas d'indicateurs/interprétation, pas de connecteurs réseau.
+
 ## [Non publié]
 
 ### Added
