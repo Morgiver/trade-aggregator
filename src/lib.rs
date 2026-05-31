@@ -32,6 +32,7 @@ pub use extension::{ChannelSink, FnSubscriber, Subscriber};
 pub use orderflow::{BarComponent, Cvd, Delta, Footprint, VolumeProfile};
 pub use passive::{BookError, LiquidityProfile, OrderBook, PassiveAggregator};
 pub use period::{
-    AlignedTimePeriod, Boundary, DollarPeriod, Period, RangePeriod, RenkoPeriod, TickPeriod,
-    TimePeriod, VolumePeriod,
+    AlignedTimePeriod, Boundary, DollarImbalancePeriod, DollarPeriod, Period, RangePeriod,
+    RenkoPeriod, RunPeriod, TickImbalancePeriod, TickPeriod, TimePeriod, VolumeImbalancePeriod,
+    VolumePeriod,
 };
