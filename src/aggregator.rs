@@ -1,46 +1,81 @@
 //! `SymbolAggregator` : racine d'exécution par symbole (fiches `SYM-*`).
 //!
-//! Route les `MarketEvent` vers les périodes, fan-out, ferme les barres et notifie les
-//! abonnés. Déterministe (event-time). T0 : côté agressif seulement.
+//! Route les `MarketEvent` vers les périodes, fan-out, compose les lentilles order flow,
+//! ferme les barres et notifie les abonnés. Déterministe (event-time). T0 : côté agressif.
 
 use crate::bar::Bar;
 use crate::canonical::{Granularity, Instrument, MarketEvent, Trade};
 use crate::error::ConfigError;
 use crate::extension::Subscriber;
+use crate::orderflow::{Cvd, LensInstance, LensKind, OrderFlow};
 use crate::period::{Boundary, Period, TimePeriod};
 
-/// Une période enregistrée + sa barre en formation.
+/// Une période enregistrée + ses lentilles + sa barre en formation.
 struct Slot {
     period: Box<dyn Period>,
     label: String,
+    lens_kinds: Vec<LensKind>,
+    /// Lentilles vivantes de la barre courante.
+    lenses: Vec<LensInstance>,
+    /// État inter-barres du cumulative delta (alimenté si une lentille `Delta` est active).
+    cvd: Cvd,
     current: Option<Bar>,
 }
 
-/// Constructeur (fiche `SYM-5`/`SYM-6`) avec **fail-fast** sur la granularité.
+impl Slot {
+    fn fresh_lenses(&self) -> Vec<LensInstance> {
+        self.lens_kinds
+            .iter()
+            .map(|&k| LensInstance::from_kind(k))
+            .collect()
+    }
+
+    /// Construit l'`OrderFlow` de la barre courante (snapshot des lentilles + CVD).
+    fn snapshot_orderflow(&mut self) -> OrderFlow {
+        let mut of = OrderFlow::default();
+        for lens in &mut self.lenses {
+            if let Some(bar_delta) = lens.snapshot_into(&mut of) {
+                of.cvd = Some(self.cvd.push_bar_delta(bar_delta));
+            }
+        }
+        of
+    }
+}
+
+/// Constructeur (fiches `SYM-5`/`SYM-6`) avec **fail-fast** sur la granularité.
 pub struct Builder {
     instrument: Instrument,
     granularity: Granularity,
-    periods: Vec<Box<dyn Period>>,
+    specs: Vec<(Box<dyn Period>, Vec<LensKind>)>,
 }
 
 impl Builder {
-    /// Ajoute une période quelconque.
-    pub fn with_period(mut self, period: Box<dyn Period>) -> Self {
-        self.periods.push(period);
+    /// Ajoute une période sans lentille.
+    pub fn with_period(self, period: Box<dyn Period>) -> Self {
+        self.with_period_and_lenses(period, Vec::new())
+    }
+
+    /// Ajoute une période avec ses lentilles order flow (fiche `OF-COMP`).
+    pub fn with_period_and_lenses(
+        mut self,
+        period: Box<dyn Period>,
+        lenses: Vec<LensKind>,
+    ) -> Self {
+        self.specs.push((period, lenses));
         self
     }
 
-    /// Raccourci : ajoute une barre temporelle de `interval_ns` (fiche `AGG-P1`).
+    /// Raccourci : barre temporelle de `interval_ns` (fiche `AGG-P1`), sans lentille.
     pub fn with_time_period(self, interval_ns: i64) -> Self {
         self.with_period(Box::new(TimePeriod::new(interval_ns)))
     }
 
     /// Valide la configuration et construit l'agrégateur.
     ///
-    /// Échoue (fiche `SYM-8`/`CAN-7`/`TR-6`) si une période exige une granularité
+    /// Échoue (fiches `SYM-8`/`CAN-7`/`TR-6`) si une période exige une granularité
     /// supérieure à celle déclarée.
     pub fn build(self) -> Result<SymbolAggregator, ConfigError> {
-        for p in &self.periods {
+        for (p, _) in &self.specs {
             let required = p.min_granularity();
             if required > self.granularity {
                 return Err(ConfigError::IncompatibleGranularity {
@@ -50,13 +85,16 @@ impl Builder {
             }
         }
         let slots = self
-            .periods
+            .specs
             .into_iter()
-            .map(|p| {
+            .map(|(p, lens_kinds)| {
                 let label = p.label();
                 Slot {
                     period: p,
                     label,
+                    lens_kinds,
+                    lenses: Vec::new(),
+                    cvd: Cvd::new(),
                     current: None,
                 }
             })
@@ -84,7 +122,7 @@ impl SymbolAggregator {
         Builder {
             instrument,
             granularity,
-            periods: Vec::new(),
+            specs: Vec::new(),
         }
     }
 
@@ -124,12 +162,25 @@ impl SymbolAggregator {
                         .as_mut()
                         .expect("barre courante absente après ouverture")
                         .add(t);
+                    for lens in &mut slot.lenses {
+                        lens.on_trade(t);
+                    }
                 }
                 Boundary::CloseAndOpen { start, end } => {
-                    if let Some(bar) = slot.current.take() {
+                    if slot.current.is_some() {
+                        let of = slot.snapshot_orderflow();
+                        let mut bar = slot.current.take().unwrap();
+                        bar.orderflow = of;
                         notify(&mut self.subscribers, &slot.label, &bar);
                     }
-                    slot.current = Some(Bar::open(start, end, t));
+                    // Ouvre la nouvelle barre et ses lentilles fraîches.
+                    slot.lenses = slot.fresh_lenses();
+                    let mut bar = Bar::open(start, end, t);
+                    bar.partial = false;
+                    for lens in &mut slot.lenses {
+                        lens.on_trade(t);
+                    }
+                    slot.current = Some(bar);
                 }
             }
         }
@@ -139,8 +190,11 @@ impl SymbolAggregator {
     /// Les barres émises sont marquées `partial`.
     pub fn finish(&mut self) {
         for slot in &mut self.slots {
-            if let Some(mut bar) = slot.current.take() {
+            if slot.current.is_some() {
+                let of = slot.snapshot_orderflow();
+                let mut bar = slot.current.take().unwrap();
                 bar.partial = true;
+                bar.orderflow = of;
                 notify(&mut self.subscribers, &slot.label, &bar);
             }
         }

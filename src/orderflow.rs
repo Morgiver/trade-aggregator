@@ -1,8 +1,8 @@
 //! Lentilles **order flow** attachées à une `Bar` (nœud `aggressor/orderflow`).
 //!
 //! Lot A de la tranche T1. Chaque lentille est un **accumulateur composable**
-//! (`BarComponent`). Le câblage dans `SymbolAggregator` (composabilité, émission) vient
-//! au lot suivant — ici, les lentilles sont des unités autonomes et testées.
+//! (`BarComponent`), câblé dans `SymbolAggregator` via `LensKind` (composabilité) et
+//! exposé à la clôture dans `OrderFlow` attaché à la `Bar`.
 
 use std::collections::BTreeMap;
 
@@ -20,7 +20,7 @@ pub trait BarComponent {
 ///
 /// Un trade de côté `Unknown` n'est attribué ni au Bid ni à l'Ask (sa quantité n'entre
 /// pas dans les cellules) — il reste comptabilisé ailleurs (OHLCV, profil de volume).
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct Footprint {
     /// `prix → (volume acheteur agressif, volume vendeur agressif)`.
     cells: BTreeMap<Px, (Qty, Qty)>,
@@ -52,7 +52,7 @@ impl BarComponent for Footprint {
 }
 
 /// **Profil de volume** + `POC` + `Value Area` (fiches `VP-1`/`VP-2`/`VP-3`).
-#[derive(Debug, Clone)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct VolumeProfile {
     by_price: BTreeMap<Px, Qty>,
     value_area_pct: f64,
@@ -169,6 +169,76 @@ impl Cvd {
     }
     pub fn value(&self) -> i64 {
         self.cumulative
+    }
+}
+
+/// Résultats order flow attachés à une `Bar` fermée (snapshot des lentilles actives).
+#[derive(Debug, Clone, Default, PartialEq)]
+pub struct OrderFlow {
+    pub footprint: Option<Footprint>,
+    pub volume_profile: Option<VolumeProfile>,
+    /// Delta de la barre (`DC-1`).
+    pub delta: Option<i64>,
+    /// Cumulative delta à la clôture de cette barre (`DC-2`, état inter-barres).
+    pub cvd: Option<i64>,
+}
+
+/// Choix de lentilles à activer sur une période (fiche `OF-COMP`).
+#[derive(Debug, Clone, Copy, PartialEq)]
+pub enum LensKind {
+    Footprint,
+    VolumeProfile {
+        value_area_pct: f64,
+    },
+    /// Delta de barre (+ CVD cumulé automatiquement au niveau de la période).
+    Delta,
+}
+
+/// Instance vivante d'une lentille pour la barre en cours.
+pub(crate) enum LensInstance {
+    Footprint(Footprint),
+    VolumeProfile(VolumeProfile),
+    Delta(Delta),
+}
+
+impl LensInstance {
+    pub(crate) fn from_kind(kind: LensKind) -> Self {
+        match kind {
+            LensKind::Footprint => LensInstance::Footprint(Footprint::new()),
+            LensKind::VolumeProfile { value_area_pct } => {
+                LensInstance::VolumeProfile(VolumeProfile::new(value_area_pct))
+            }
+            LensKind::Delta => LensInstance::Delta(Delta::new()),
+        }
+    }
+
+    pub(crate) fn on_trade(&mut self, t: &Trade) {
+        match self {
+            LensInstance::Footprint(c) => c.on_trade(t),
+            LensInstance::VolumeProfile(c) => c.on_trade(t),
+            LensInstance::Delta(c) => c.on_trade(t),
+        }
+    }
+
+    /// Verse le résultat de la lentille dans `of` ; renvoie le delta si c'en est un.
+    pub(crate) fn snapshot_into(&mut self, of: &mut OrderFlow) -> Option<i64> {
+        match self {
+            LensInstance::Footprint(c) => {
+                c.on_close();
+                of.footprint = Some(c.clone());
+                None
+            }
+            LensInstance::VolumeProfile(c) => {
+                c.on_close();
+                of.volume_profile = Some(c.clone());
+                None
+            }
+            LensInstance::Delta(c) => {
+                c.on_close();
+                of.delta = Some(c.value());
+                Some(c.value())
+            }
+        }
     }
 }
 
