@@ -1,0 +1,16 @@
+[package]
+name = "trade-aggregator"
+version = "0.0.0"
+edition = "2024"
+description = "Agrégation de trades de marché (order flow agressif & profils de liquidité passifs), temps réel et replay, déterministe."
+license = "MIT OR Apache-2.0"
+repository = "https://github.com/Morgiver/trade-aggregator"
+publish = false
+
+[features]
+default = []
+# Mapping DataBento (crate `dbn`) — isolé, activé à la demande.
+databento = ["dep:dbn"]
+
+[dependencies]
+dbn = { version = "0.43", optional = true }
