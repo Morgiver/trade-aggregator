@@ -55,3 +55,4 @@ La reconstruction **produit un état** ; elle n'en tire **aucune** conclusion (i
 - **`OB-7`** — Niveaux agrégés L2 (`prix → quantité`) · **P1** · *book L2 correct.*
 - **`OB-8`** — Ordres individuels L3 (+ dérivation L2) · **P1** · *book L3 maintenu, L2 dérivable.*
 - **`OB-9`** — Requêtes (best bid/ask, depth N, snapshot) · **P1** · *état interrogeable à la demande.*
+- **`OB-10`** — Intégrité (book croisé bid≥ask, niveau négatif) · **P2** · *une incohérence est détectée et traitée (resync), jamais ignorée silencieusement.* *(passe de relecture)*

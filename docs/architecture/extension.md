@@ -43,3 +43,4 @@ d'indicateurs, viz, stratégie) — un autre projet.
 - **`EXT-5`** — Adaptateur `Iterator`/`Stream` (pull) · **P1** · *consommation pull, composable.*
 - **`EXT-6`** — État interrogeable (snapshot à la demande) · **P2** · *lecture de l'état courant sans abonnement.*
 - **`EXT-7`** — Garantie d'alignement des deux côtés · **P1** · *aggressor et passive exposés sur mêmes bornes.*
+- **`EXT-8`** — Cycle de vie des abonnés ((dés)abonnement) · **P2** · *on peut abonner/désabonner un subscriber proprement.* *(passe de relecture)*

@@ -44,3 +44,4 @@
 - **`CAN-10`** — Mapping DataBento : `definition` → `Instrument` · **P1** · *définition DBN → `Instrument`.*
 - **`CAN-11`** — Mapping `AggressorSide` (DBN `Ask/Bid` → `Sell/Buy`) · **P0** · *convention agresseur correcte.*
 - **`CAN-12`** — Isolation feature-gate `databento` · **P0** · *la crate compile sans la feature ; le cœur ne dépend pas de `dbn`.*
+- **`CAN-13`** — Mapping DataBento : schémas `mbp-1`/`mbp-10` (L2) → `BookUpdate` · **P1** · *un flux L2 alimente le book sans identité d'ordre.* *(passe de relecture)*

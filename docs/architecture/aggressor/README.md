@@ -104,3 +104,4 @@ Les lentilles order flow sont riches → re-décomposées dans **[`orderflow/`](
 - **`AGG-B2`** — Calcul `OHLCV` · **P0** · *open/high/low/close/volume corrects.*
 - **`AGG-B3`** — Émission `BarUpdate` (intra-bar) · **P1** · *un event en cours notifie la bar en formation.*
 - **`AGG-B4`** — Émission `BarClose` · **P0** · *la fermeture notifie la bar finalisée.*
+- **`AGG-B5`** — Première bar partielle / warm-up · **P1** · *une bar commencée en milieu de période est marquée partielle.* *(passe de relecture)*

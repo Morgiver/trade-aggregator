@@ -45,3 +45,4 @@
 - **`TR-7`** — Tolérance/resync en flux · **P2** · *anomalie de book → resync, pas de panic.*
 - **`TR-8`** — Erreurs de mapping aux frontières (`Result`) · **P1** · *décodage source faillible hors du cœur.*
 - **`TR-9`** — Hooks de métriques optionnels · **P3** · *observabilité sans coût quand désactivée.*
+- **`TR-10`** — Bornes mémoire (profondeur du book, plage de prix des profils) · **P2** · *structures bornées ; pas de croissance mémoire non maîtrisée en flux long.* *(passe de relecture)*

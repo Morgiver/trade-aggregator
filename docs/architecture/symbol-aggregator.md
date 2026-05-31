@@ -41,3 +41,4 @@ Une instance = **un** symbole. Le multi-symboles se fait **par composition** au-
 - **`SYM-8`** — Fail-fast granularité incompatible · **P0** · *agrégation non supportée → erreur à la construction.*
 - **`SYM-9`** — Garantie d'alignement des bornes de `Period` (deux côtés) · **P1** · *aggressor et passive ferment sur les mêmes bornes.*
 - **`SYM-10`** — Composition multi-symboles (1 instance/symbole) · **P1** · *N symboles = N instances orchestrées au-dessus.*
+- **`SYM-11`** — Flush / finalize de fin de flux · **P1** · *en fin de replay, les bars en formation sont finalisées (`BarClose`) proprement.* *(passe de relecture)*
