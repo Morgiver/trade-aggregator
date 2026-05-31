@@ -35,7 +35,16 @@ en temps réel. Il **n'interprète pas** ces données.
   depth, déséquilibre moyen.
 
 ### D. Entrée & exécution
-- **Adapter DataBento** via la crate officielle `dbn` (MBO/L3, side agresseur fourni).
+- **Un seul format d'entrée canonique** (maison) : la crate est **source-agnostic**, elle
+  ne connaît qu'un modèle d'événements normalisé. *(décision Morgan : un seul format
+  dans le scope ; les adapters par venue sont hors scope — cf. OUT.)*
+- **Mapping DataBento** (via la crate officielle `dbn`, MBO/L3, side agresseur fourni)
+  fourni comme module **isolé / feature-gated** : DataBento est un *format* (pas un
+  connecteur réseau) et notre source de référence + golden dataset de test.
+- **Granularité déclarée à la création** de l'agrégateur (L3/MBO, L2/MBP, L1/BBO) ; le
+  computing **s'adapte** aux capacités disponibles. Demander une agrégation incompatible
+  avec la granularité déclarée → **erreur à la construction** (fail-fast). *(décision
+  Morgan.)*
 - **Live + replay** sur la même API : `process(event)` sur des événements horodatés ;
   le temps vient des **données** (event-time) → déterministe, testable.
 
@@ -52,17 +61,17 @@ en temps réel. Il **n'interprète pas** ces données.
 |---|---|
 | **Layer d'indicateurs** (calcul d'indicateurs techniques) | = interprétation → **autre projet**. |
 | **Métriques cross-aggregator** : absorption, détection icebergs/refills | = interprétation. La crate **aligne** les deux côtés ; le consommateur calcule. |
-| **Connecteurs exchange / websocket / REST** (réseau, auth, reconnection) | la crate consomme un flux normalisé, elle ne se connecte pas. |
+| **Connecteurs / adapters par venue** (Binance, Bybit, Coinbase…) + réseau / websocket / REST | un seul format canonique IN ; chaque venue = un adapter dédié → relève d'un **scope « connecteurs »** distinct (projet compagnon éventuel). |
 | **Réutilisation / inspiration** de `trade_aggregation` ou des crates TA (yata/kand/mantis-ta) | décision : on fait **maison**. |
 | **Stockage / persistance** de la donnée brute ou agrégée | non requis ; à la charge du consommateur. |
 | **Backtesting / exécution d'ordres / stratégies** | clairement un autre étage. |
 
 ---
 
-## Zone grise — arbitrages restants (à trancher en Vision)
+## Arbitrages tranchés (31/05/2026)
 
-- **Normaliseurs multi-sources** : au-delà de DataBento, fournit-on des adapters de
-  format pour Binance / Bybit / Coinbase, ou seulement un **trait d'entrée** que
-  l'utilisateur mappe ? (le réseau reste OUT dans tous les cas)
-- **Granularité minimale d'entrée** garantie : exige-t-on du L3/MBO, ou accepte-t-on de
-  dégrader proprement avec du L2/MBP (book sans identité d'ordre) ?
+- **Normaliseurs multi-sources** → ✅ **un seul format canonique** dans le scope ; les
+  adapters par venue sont **OUT** (scope « connecteurs »). Mapping DataBento fourni mais
+  isolé (format de référence + test).
+- **Granularité d'entrée** → ✅ **déclarée à la création** de l'agrégateur ; le computing
+  s'adapte aux capacités ; agrégation incompatible = **erreur fail-fast**.
