@@ -11,7 +11,8 @@ use std::path::Path;
 use dbn::decode::{DbnDecoder, DecodeRecordRef};
 
 use crate::aggregator::SymbolAggregator;
-use crate::canonical::{AggressorSide, MarketEvent, Trade};
+use crate::canonical::{AggressorSide, BookAction, BookSide, BookUpdate, MarketEvent, Trade};
+use crate::passive::OrderBook;
 
 /// Convertit le côté DBN (octet `B`/`A`/`N`) en `AggressorSide` (fiche `CAN-11`).
 fn aggressor_from_dbn(side: std::os::raw::c_char) -> AggressorSide {
@@ -70,4 +71,93 @@ pub fn replay_trades_file<P: AsRef<Path>>(
     }
     agg.finish();
     Ok(n)
+}
+
+/// Reconstruit un `OrderBook` (L2) à partir d'un message **MBP-10** (fiche `CAN-13`).
+///
+/// Un message MBP donne les meilleurs niveaux du carnet à l'instant `t` (snapshot) :
+/// on reconstruit donc le book directement depuis ses niveaux (les niveaux vides,
+/// quantité 0, sont ignorés).
+pub fn book_from_mbp10(msg: &dbn::Mbp10Msg) -> OrderBook {
+    let mut book = OrderBook::new();
+    for lvl in msg.levels.iter() {
+        if lvl.bid_sz > 0 {
+            book.set_level(BookSide::Bid, lvl.bid_px, lvl.bid_sz as u64);
+        }
+        if lvl.ask_sz > 0 {
+            book.set_level(BookSide::Ask, lvl.ask_px, lvl.ask_sz as u64);
+        }
+    }
+    book
+}
+
+/// Mappe un message **MBO** en `BookUpdate` canonique (fiche `CAN-9`).
+///
+/// `A`dd / `C`ancel / `M`odify → `Add`/`Cancel`/`Modify` ; côté `B`id/`A`sk.
+/// Renvoie `None` pour les actions non liées au maintien du book (`T`rade, `F`ill,
+/// clea`R`, `N`one).
+///
+/// ⚠️ Reconstruction L3→L2 *fidèle* (suivi par `order_id`, gestion fine des `Modify`
+/// multi-ordres par niveau) : raffinement ultérieur. Ici on transmet l'`order_id` brut.
+pub fn book_update_from_mbo(msg: &dbn::MboMsg) -> Option<BookUpdate> {
+    let action = match msg.action as u8 {
+        b'A' => BookAction::Add,
+        b'C' => BookAction::Cancel,
+        b'M' => BookAction::Modify,
+        _ => return None,
+    };
+    let side = match msg.side as u8 {
+        b'B' => BookSide::Bid,
+        b'A' => BookSide::Ask,
+        _ => return None,
+    };
+    Some(BookUpdate {
+        ts: msg.hd.ts_event as i64,
+        action,
+        side,
+        price: msg.price,
+        size: msg.size as u64,
+        order_id: Some(msg.order_id),
+        instrument_id: msg.hd.instrument_id,
+    })
+}
+
+/// Rejoue un fichier `*.mbp-10.dbn.zst` en reconstruisant le book à chaque message.
+/// Renvoie `(messages lus, messages où le book était croisé)`. `limit` borne la lecture.
+pub fn replay_mbp10_file<P: AsRef<Path>>(
+    path: P,
+    instrument_id: u32,
+    limit: Option<usize>,
+) -> Result<(usize, usize), dbn::Error> {
+    let mut decoder = DbnDecoder::from_zstd_file(path)?;
+    let (mut n, mut crossed) = (0usize, 0usize);
+    while let Some(rec) = decoder.decode_record_ref()? {
+        if let Some(m) = rec.get::<dbn::Mbp10Msg>() {
+            if m.hd.instrument_id != instrument_id {
+                continue;
+            }
+            let book = book_from_mbp10(m);
+            n += 1;
+            if book.is_crossed() {
+                crossed += 1;
+            }
+            if let Some(max) = limit
+                && n >= max
+            {
+                break;
+            }
+        }
+    }
+    Ok((n, crossed))
+}
+
+/// Premier `instrument_id` rencontré dans un fichier MBP-10.
+pub fn first_mbp10_instrument_id<P: AsRef<Path>>(path: P) -> Result<Option<u32>, dbn::Error> {
+    let mut decoder = DbnDecoder::from_zstd_file(path)?;
+    while let Some(rec) = decoder.decode_record_ref()? {
+        if let Some(m) = rec.get::<dbn::Mbp10Msg>() {
+            return Ok(Some(m.hd.instrument_id));
+        }
+    }
+    Ok(None)
 }

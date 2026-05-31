@@ -4,10 +4,11 @@
 //! ferme les barres et notifie les abonnés. Déterministe (event-time). T0 : côté agressif.
 
 use crate::bar::Bar;
-use crate::canonical::{Granularity, Instrument, MarketEvent, Trade};
+use crate::canonical::{BookUpdate, Granularity, Instrument, MarketEvent, Trade};
 use crate::error::ConfigError;
 use crate::extension::Subscriber;
 use crate::orderflow::{Cvd, LensInstance, LensKind, OrderFlow};
+use crate::passive::{LiquidityProfile, OrderBook, PassiveAggregator};
 use crate::period::{Boundary, Period, TimePeriod};
 
 /// Une période enregistrée + ses lentilles + sa barre en formation.
@@ -47,6 +48,8 @@ pub struct Builder {
     instrument: Instrument,
     granularity: Granularity,
     specs: Vec<(Box<dyn Period>, Vec<LensKind>)>,
+    passive: bool,
+    passive_window: Option<i64>,
 }
 
 impl Builder {
@@ -70,6 +73,21 @@ impl Builder {
         self.with_period(Box::new(TimePeriod::new(interval_ns)))
     }
 
+    /// Active le côté passif (reconstruction du carnet) — fiche `PAS-1`.
+    /// Exige une granularité ≥ L2 (sinon `build()` échoue, fiche `PAS-3`).
+    pub fn with_passive(mut self) -> Self {
+        self.passive = true;
+        self
+    }
+
+    /// Active le côté passif **avec profils de liquidité périodiques** de `window_ns`
+    /// (fenêtres alignées sur l'horloge, fiches `LP-*`/`PAS-2`).
+    pub fn with_liquidity_profile(mut self, window_ns: i64) -> Self {
+        self.passive = true;
+        self.passive_window = Some(window_ns);
+        self
+    }
+
     /// Valide la configuration et construit l'agrégateur.
     ///
     /// Échoue (fiches `SYM-8`/`CAN-7`/`TR-6`) si une période exige une granularité
@@ -83,6 +101,13 @@ impl Builder {
                     declared: self.granularity,
                 });
             }
+        }
+        // Le côté passif exige au moins du L2 (fiche `PAS-3`).
+        if self.passive && self.granularity < Granularity::L2 {
+            return Err(ConfigError::IncompatibleGranularity {
+                required: Granularity::L2,
+                declared: self.granularity,
+            });
         }
         let slots = self
             .specs
@@ -104,6 +129,10 @@ impl Builder {
             granularity: self.granularity,
             slots,
             subscribers: Vec::new(),
+            passive: self.passive.then(|| match self.passive_window {
+                Some(w) => PassiveAggregator::with_window(w),
+                None => PassiveAggregator::new(),
+            }),
         })
     }
 }
@@ -114,6 +143,8 @@ pub struct SymbolAggregator {
     granularity: Granularity,
     slots: Vec<Slot>,
     subscribers: Vec<Box<dyn Subscriber>>,
+    /// Côté passif (carnet), présent si activé via `with_passive` (fiche `PAS-1`).
+    passive: Option<PassiveAggregator>,
 }
 
 impl SymbolAggregator {
@@ -123,6 +154,8 @@ impl SymbolAggregator {
             instrument,
             granularity,
             specs: Vec::new(),
+            passive: false,
+            passive_window: None,
         }
     }
 
@@ -146,7 +179,24 @@ impl SymbolAggregator {
         match event {
             // Routage : un trade alimente le côté agressif (fiche `SYM-2`).
             MarketEvent::Trade(t) => self.on_trade(t),
+            // Routage : un book update alimente le côté passif (fiche `SYM-3`).
+            MarketEvent::BookUpdate(b) => self.on_book_update(b),
         }
+    }
+
+    fn on_book_update(&mut self, b: &BookUpdate) {
+        if b.instrument_id != self.instrument.id {
+            return;
+        }
+        if let Some(passive) = &mut self.passive {
+            // L'anomalie d'intégrité est tolérée (book borné) — cf. `OB-10`/`TR-7`.
+            let _ = passive.apply(b);
+        }
+    }
+
+    /// Carnet courant, si le côté passif est actif (fiche `EXT-6` — état interrogeable).
+    pub fn book(&self) -> Option<&OrderBook> {
+        self.passive.as_ref().map(|p| p.book())
     }
 
     fn on_trade(&mut self, t: &Trade) {
@@ -205,6 +255,18 @@ impl SymbolAggregator {
                 notify(&mut self.subscribers, &slot.label, &bar);
             }
         }
+        if let Some(passive) = &mut self.passive {
+            passive.finish();
+        }
+    }
+
+    /// Récupère et vide les profils de liquidité fermés (fiches `LP-*`/`EXT-6`).
+    /// Vide si le côté passif n'a pas de fenêtre configurée.
+    pub fn drain_liquidity_profiles(&mut self) -> Vec<LiquidityProfile> {
+        self.passive
+            .as_mut()
+            .map(|p| p.drain_profiles())
+            .unwrap_or_default()
     }
 }
 

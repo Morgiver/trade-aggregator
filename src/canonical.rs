@@ -36,12 +36,48 @@ pub struct Trade {
     pub instrument_id: u32,
 }
 
-/// Événement de marché horodaté en entrée (fiche `CAN-4`).
+/// Côté du **carnet** (liquidité passive) — distinct de `AggressorSide` (fiche `CAN-2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookSide {
+    /// Acheteurs passifs.
+    Bid,
+    /// Vendeurs passifs.
+    Ask,
+}
+
+/// Action sur le carnet (fiche `CAN-2`).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum BookAction {
+    /// Ajoute de la liquidité à un niveau (ou un ordre).
+    Add,
+    /// Retire de la liquidité.
+    Cancel,
+    /// Modifie la quantité (et/ou le prix) à un niveau / d'un ordre.
+    Modify,
+}
+
+/// Événement modifiant le carnet (fiche `CAN-2`).
 ///
-/// T0 : une seule variante (`Trade`). `BookUpdate` sera ajouté en T2.
+/// `order_id` présent en L3 (market-by-order), absent en L2 (market-by-price).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct BookUpdate {
+    pub ts: Ts,
+    pub action: BookAction,
+    pub side: BookSide,
+    pub price: Px,
+    /// Quantité (nouvelle quantité au niveau pour `Modify`, quantité ajoutée/retirée sinon).
+    pub size: Qty,
+    pub order_id: Option<u64>,
+    pub instrument_id: u32,
+}
+
+/// Événement de marché horodaté en entrée (fiche `CAN-4`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum MarketEvent {
+    /// Consommation de liquidité (tape) → côté agressif.
     Trade(Trade),
+    /// Modification du carnet → côté passif (T2).
+    BookUpdate(BookUpdate),
 }
 
 impl MarketEvent {
@@ -49,6 +85,7 @@ impl MarketEvent {
     pub fn ts(&self) -> Ts {
         match self {
             MarketEvent::Trade(t) => t.ts,
+            MarketEvent::BookUpdate(b) => b.ts,
         }
     }
 }
