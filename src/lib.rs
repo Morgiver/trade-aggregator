@@ -30,7 +30,7 @@ pub use canonical::{BookAction, BookSide, BookUpdate};
 pub use error::ConfigError;
 pub use extension::{ChannelSink, FnSubscriber, Subscriber};
 pub use orderflow::{BarComponent, Cvd, Delta, Footprint, LensKind, OrderFlow, Tpo, VolumeProfile};
-pub use passive::{BookError, LiquidityProfile, OrderBook, PassiveAggregator};
+pub use passive::{BookError, LiquidityProfile, MboBook, OrderBook, PassiveAggregator};
 pub use period::{
     AlignedTimePeriod, Boundary, DollarImbalancePeriod, DollarPeriod, Period, PointFigurePeriod,
     RangePeriod, RenkoPeriod, RunPeriod, TickImbalancePeriod, TickPeriod, TimePeriod,

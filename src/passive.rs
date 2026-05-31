@@ -3,7 +3,7 @@
 //! T2 lot A : `OrderBook` (reconstruction L2 par niveau de prix) + `PassiveAggregator`
 //! (maintient le book). Les profils de liquidité périodiques arrivent au lot B.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, HashMap};
 
 use crate::canonical::{BookAction, BookSide, BookUpdate, Px, Qty, Ts};
 
@@ -132,6 +132,30 @@ impl OrderBook {
         match side {
             BookSide::Bid => self.bids.values().copied().sum(),
             BookSide::Ask => self.asks.values().copied().sum(),
+        }
+    }
+
+    /// Quantité à un niveau de prix (0 si absent).
+    pub fn qty_at(&self, side: BookSide, price: Px) -> Qty {
+        match side {
+            BookSide::Bid => self.bids.get(&price).copied().unwrap_or(0),
+            BookSide::Ask => self.asks.get(&price).copied().unwrap_or(0),
+        }
+    }
+
+    /// Élague le book aux `n` meilleurs niveaux par côté (fiche `TR-10`, bornes mémoire).
+    pub fn prune_to_depth(&mut self, n: usize) {
+        while self.bids.len() > n {
+            // Retire le pire bid (prix le plus bas).
+            if let Some((&p, _)) = self.bids.iter().next() {
+                self.bids.remove(&p);
+            }
+        }
+        while self.asks.len() > n {
+            // Retire le pire ask (prix le plus haut).
+            if let Some((&p, _)) = self.asks.iter().next_back() {
+                self.asks.remove(&p);
+            }
         }
     }
 }
@@ -307,6 +331,67 @@ impl PassiveAggregator {
     }
 }
 
+/// Reconstruction **L3 fidèle** (market-by-order) dérivant un `OrderBook` L2 (fiche
+/// `CAN-9` raffinée / T4). Suit chaque ordre par `order_id` ; le L2 reste exactement la
+/// somme des ordres par niveau, y compris sur `Modify` multi-ordres.
+#[derive(Debug, Default)]
+pub struct MboBook {
+    orders: HashMap<u64, (BookSide, Px, Qty)>,
+    book: OrderBook,
+}
+
+impl MboBook {
+    pub fn new() -> Self {
+        Self::default()
+    }
+
+    fn add_contrib(&mut self, side: BookSide, price: Px, qty: Qty) {
+        let cur = self.book.qty_at(side, price);
+        self.book.set_level(side, price, cur + qty);
+    }
+    fn remove_contrib(&mut self, side: BookSide, price: Px, qty: Qty) {
+        let cur = self.book.qty_at(side, price);
+        self.book.set_level(side, price, cur.saturating_sub(qty));
+    }
+
+    /// Applique un `BookUpdate` L3 (nécessite `order_id`). Sans `order_id`, l'update est
+    /// appliqué directement au L2 (dégradation).
+    pub fn apply(&mut self, u: &BookUpdate) -> Result<(), BookError> {
+        let Some(id) = u.order_id else {
+            return self.book.apply(u);
+        };
+        match u.action {
+            BookAction::Add => {
+                self.orders.insert(id, (u.side, u.price, u.size));
+                self.add_contrib(u.side, u.price, u.size);
+            }
+            BookAction::Cancel => {
+                if let Some((s, p, sz)) = self.orders.remove(&id) {
+                    self.remove_contrib(s, p, sz);
+                }
+            }
+            BookAction::Modify => {
+                if let Some((s, p, sz)) = self.orders.remove(&id) {
+                    self.remove_contrib(s, p, sz);
+                }
+                self.orders.insert(id, (u.side, u.price, u.size));
+                self.add_contrib(u.side, u.price, u.size);
+            }
+        }
+        Ok(())
+    }
+
+    /// Le carnet L2 dérivé.
+    pub fn book(&self) -> &OrderBook {
+        &self.book
+    }
+
+    /// Nombre d'ordres suivis.
+    pub fn order_count(&self) -> usize {
+        self.orders.len()
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -387,5 +472,51 @@ mod tests {
             .unwrap();
         b.clear();
         assert_eq!(b.best_bid(), None);
+    }
+
+    fn mbo(id: u64, action: BookAction, side: BookSide, price: Px, size: Qty) -> BookUpdate {
+        BookUpdate {
+            ts: 0,
+            action,
+            side,
+            price,
+            size,
+            order_id: Some(id),
+            instrument_id: 1,
+        }
+    }
+
+    // UC-T4-1/2 : MboBook L3→L2 fidèle (multi-ordres par niveau, Modify).
+    #[test]
+    fn mbo_book_l3_to_l2_is_faithful() {
+        use BookAction::{Add, Cancel, Modify};
+        use BookSide::Bid;
+        let mut m = MboBook::new();
+        m.apply(&mbo(1, Add, Bid, 100, 5)).unwrap(); // niveau 100 = 5
+        m.apply(&mbo(2, Add, Bid, 100, 3)).unwrap(); // 2 ordres → 100 = 8
+        assert_eq!(m.book().qty_at(Bid, 100), 8);
+        assert_eq!(m.order_count(), 2);
+
+        m.apply(&mbo(1, Modify, Bid, 100, 10)).unwrap(); // ordre1 5→10 : 8-5+10 = 13
+        assert_eq!(m.book().qty_at(Bid, 100), 13);
+
+        m.apply(&mbo(2, Cancel, Bid, 100, 3)).unwrap(); // retire ordre2 : 13-3 = 10
+        assert_eq!(m.book().qty_at(Bid, 100), 10);
+
+        m.apply(&mbo(1, Modify, Bid, 99, 4)).unwrap(); // ordre1 change de prix 100→99
+        assert_eq!(m.book().qty_at(Bid, 100), 0);
+        assert_eq!(m.book().qty_at(Bid, 99), 4);
+        assert_eq!(m.order_count(), 1);
+    }
+
+    // UC-T4-3 : profondeur bornée (TR-10).
+    #[test]
+    fn prune_to_depth_keeps_best_levels() {
+        let mut b = OrderBook::new();
+        for (p, q) in [(100, 1), (99, 1), (98, 1), (97, 1)] {
+            b.apply(&upd(BookAction::Add, BookSide::Bid, p, q)).unwrap();
+        }
+        b.prune_to_depth(2);
+        assert_eq!(b.depth(BookSide::Bid, 10), vec![(100, 1), (99, 1)]);
     }
 }
