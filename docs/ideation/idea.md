@@ -27,9 +27,13 @@ SymbolAggregator { instrument definition }      (1 par symbole)
 - **Une seule source, un routage** : sur DataBento MBO, trades ET events de book sont
   dans le même flux horodaté → `SymbolAggregator.process(event)` route Trade→Aggressor,
   Add/Cancel/Modify→Passive, puis fan-out vers N périodes.
-- **Reconstruction du carnet** (cœur du PassiveAggregator) : maintenir le book depuis
-  MBO avant d'en dériver des agrégats. Prior art : guide officiel DataBento
-  « Constructing the LOB », crates `hftbacktest`, `OrderBook-rs`, RustQuant.
+- **Maintenir vs agréger le book** (deux choses distinctes, le Passive fait les deux) :
+  - *maintenir* = tenir l'**état instantané** du carnet, change à chaque event MBO ;
+  - *agréger* = **résumer cet état sur une période** (profil de liquidité pondéré-temps,
+    snapshots ouverture/clôture, churn add/cancel, depth, déséquilibre moyen).
+  - Maintenir = prérequis ; agréger = produit. Reconstruction **maison** sur la base du
+    guide officiel DataBento « Constructing the LOB » (prior art : `hftbacktest`,
+    `OrderBook-rs`, RustQuant).
 - **Instrument definition** (tick size, price increment, lot/contract size,
   multiplicateur, devise) — schéma DataBento `definition` ; cale les niveaux de prix et
   le notional.
@@ -89,23 +93,41 @@ SymbolAggregator { instrument definition }      (1 par symbole)
   horodatés** ; le temps vient des données (event-time) → déterministe, testable. Le
   dataset DataBento de Morgan = golden dataset des tests.
 
+## Frontière de scope (ligne directrice — à graver en Phase 2 Vision)
+
+> **IN** — *agréger / structurer* la donnée brute (L3 : tape + book) en données
+> agrégées : périodes agressives, profils de liquidité passifs, footprint, TPO, alignées
+> temporellement et exposées en temps réel.
+>
+> **OUT** — *interpréter* ces données : indicateurs, signaux, détection de patterns
+> (absorption, icebergs…), + réseau / connecteurs.
+
+La ligne en une phrase : **agrégation & structuration (in) vs interprétation & computing
+analytique (out).**
+
+### Niveaux de données de marché (rappel)
+Hiérarchie d'information **décroissante**, reconstruction **descendante uniquement** :
+`L3 (MBO, par ordre) ⊃ L2 (MBP, par prix) ⊃ L1 (BBO, top)`. On dérive vers le bas, jamais
+vers le haut (info perdue irréversiblement). → MBO/L3 (DataBento) = maximum, tout
+dérivable ; le PassiveAggregator **exige** au moins du L2.
+
 ## Non-goals
 
-- **Pas** de couche layer d'indicateurs (= autre projet).
+- **Pas** de couche layer d'indicateurs ni de calcul cross-aggregator (absorption,
+  icebergs…) = interprétation → autre projet / consommateur.
 - **Pas** de connecteurs exchange / websocket / REST (réseau, auth, reconnection).
 - **Pas** de réutilisation ni d'inspiration de `trade_aggregation` ni des crates TA
-  existantes (yata/kand/mantis-ta) — on fait à notre manière.
+  existantes (yata/kand/mantis-ta) — on fait à notre manière. (Reconstruction du book =
+  maison aussi, sur la base du guide DataBento.)
 
 ## Questions ouvertes
 
 1. **Rôle de l'orderbook** : ✅ tranché → le book est un objet agrégé de premier plan
    (`PassiveAggregator`), en plus de l'order flow agressif (`AggressorAggregator`).
-2. **Reconstruction du carnet in-scope ?** Probablement oui (cœur du Passive). Et :
-   « à notre manière » comme l'agrégation, ou on s'autorise à s'appuyer sur le prior art
-   LOB *pour la reconstruction* (problème générique distinct) ? — à confirmer.
-3. **Métriques cross-aggregator** (absorption, icebergs/refills) : reco = la crate
-   **aligne** les deux côtés (event-time, bornes de barre) et le **consommateur** calcule
-   via le point d'extension ; pas de primitives cross fournies. — à confirmer.
+2. **Reconstruction du carnet** : ✅ in-scope (cœur du Passive), **maison** sur la base du
+   guide DataBento.
+3. **Métriques cross-aggregator** (absorption, icebergs/refills) : ✅ **hors scope**
+   (interprétation) ; la crate aligne les deux côtés, le consommateur calcule.
 4. **Normaliseurs vs trait d'entrée** : adapters de format (DataBento via `dbn`, schémas
    Binance/Bybit/Coinbase) vers un modèle interne unifié, ou juste un trait d'entrée que
    l'utilisateur mappe ? (réseau exclu dans tous les cas)
