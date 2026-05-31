@@ -20,4 +20,7 @@ On consigne les **changements notables** (fin de phase, tranche réalisée, déc
   Chaque feature a un toit. Issue #4 close.
 - **Phase 5 — Structuration** : 98 fiches atomiques co-localisées dans
   `docs/architecture/` (aucune feature orpheline). Issue #5 close.
-- Démarrage de la **Phase 6 — Priorisation** (issue #6).
+- **Phase 6 — Priorisation** : `docs/roadmap.md` (tranches T0→T4 ordonnées). Issue #6
+  close. **Partie documentaire (Phases 1→6) terminée.**
+- Démarrage de la **Phase 7 — Réalisation** (issue #7) — tranche **T0 walking skeleton**
+  sur branche `tranche/T0-walking-skeleton` : use-cases posés.
