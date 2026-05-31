@@ -45,22 +45,29 @@ graph TD
 | **extension** | Point d'extension réactif : push/pull, `BarClose` / `BarUpdate`, alignement des deux côtés. | feuille |
 | **transverse/** | Préoccupations qui traversent tout : performance/zero-alloc, gestion du temps (event-time), erreurs. | dossier transverse |
 
-## Arbre prévu (à valider)
+## Arbre (réel)
 
 ```
 docs/architecture/
-├── README.md             ← (ici) contexte + composants
-├── canonical.md          ← feuille
-├── symbol-aggregator.md  ← feuille
-├── aggressor/            ← nœud riche (Periods · Bars · order flow)
-│   └── README.md
-├── passive/              ← nœud riche (reconstruction book · profils)
-│   └── README.md
-├── extension.md          ← feuille
+├── README.md                    ← (ici) contexte + composants
+├── canonical.md                 ← feuille : modèle d'entrée + mapping DataBento
+├── symbol-aggregator.md         ← feuille : routage + fan-out + process(event)
+├── aggressor/                   ← nœud riche
+│   ├── README.md                  Period · Bar
+│   └── orderflow/               ← sous-nœud riche
+│       ├── README.md              trait BarComponent
+│       ├── footprint.md
+│       ├── volume-profile.md      (POC / ValueArea)
+│       ├── tpo.md
+│       └── delta-cvd.md
+├── passive/                     ← nœud riche
+│   ├── README.md
+│   ├── orderbook.md               reconstruction du carnet
+│   └── liquidity-profile.md       agrégation périodique
+├── extension.md                 ← feuille : point d'extension réactif
 └── transverse/
-    └── README.md         ← perf · temps · erreurs
+    └── README.md                ← perf · temps (event-time) · erreurs
 ```
 
-> Découpe **riche vs feuille** = proposition. On descend dans `aggressor/` et `passive/`
-> (les deux plus riches) ; le reste reste en feuille tant que le besoin ne l'exige pas
-> (YAGNI).
+> Condition d'arrêt atteinte : chaque feuille décrit une unité dont l'intérieur = le code
+> (Phase 7). **Chaque feature de la Vision a désormais un endroit clair où vivre.**

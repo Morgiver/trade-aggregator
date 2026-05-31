@@ -62,6 +62,15 @@ que via la disponibilité de l'`AggressorSide` (fallback si `None`, cf. transver
 
 ## Descente
 
-On **n'ouvre pas** de sous-dossier pour l'instant (YAGNI) : `Period`, `Bar` et les
-lentilles sont décrits ici. Si les lentilles order flow grossissent, elles pourront
-devenir un sous-nœud `aggressor/orderflow/`. Le détail des types vient en **Phase 7**.
+Les lentilles order flow sont riches → re-décomposées dans **[`orderflow/`](orderflow/)** :
+
+| Sous-nœud | Fichier |
+|---|---|
+| Vue d'ensemble + trait `BarComponent` | [`orderflow/README.md`](orderflow/README.md) |
+| Footprint | [`orderflow/footprint.md`](orderflow/footprint.md) |
+| VolumeProfile → POC / ValueArea | [`orderflow/volume-profile.md`](orderflow/volume-profile.md) |
+| TPO | [`orderflow/tpo.md`](orderflow/tpo.md) |
+| Delta / CVD | [`orderflow/delta-cvd.md`](orderflow/delta-cvd.md) |
+
+`Period` et `Bar` restent décrits ici (feuilles de ce nœud). Le détail des types vient en
+**Phase 7**.
