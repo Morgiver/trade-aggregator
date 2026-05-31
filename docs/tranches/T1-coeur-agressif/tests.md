@@ -21,4 +21,14 @@
 - **`UC-T1-11`** Range (U) — amplitude `high−low` ≤ range ; le trade qui dépasse ouvre une barre.
 - **`UC-T1-12`** Renko (U) — nouvelle brique quand `|price − open| ≥ brick`.
 
-## Lot C — Extension *(à détailler au lot C)*
+## Lot C — Extension
+
+- **`UC-T1-15`** on_bar_update (U) — un `on_bar_update` est émis à **chaque trade** intégré dans la barre en formation (méthode du trait `Subscriber`, défaut vide → rétro-compatible). `EXT-2`/`AGG-B3`.
+- **`UC-T1-17`** channel (U) — `ChannelSink` pousse les barres fermées dans un `mpsc::Sender`. `EXT-4`.
+- **`UC-T1-18`** pull (U) — le `Receiver` du channel fournit la consommation pull (itérateur `into_iter`). `EXT-5`.
+- **`UC-T1-1`/closure** (U) — `FnSubscriber(|p,b| …)`.
+
+> **`UC-T1-16` (EXT-3 / TR-2 — dispatch monomorphisé « zéro dyn dans le hot path »)
+> reporté en T4** (perf/benchmarks) : c'est une optimisation transverse qui nécessite de
+> généraliser `Period`/`Subscriber` ; à faire avec des benchmarks, pas à l'aveugle. Le
+> dispatch `dyn` actuel est correct et sans allocation par trade (`TR-1` tenu).

@@ -26,7 +26,7 @@ pub use aggregator::{Builder, SymbolAggregator};
 pub use bar::{Bar, Ohlcv};
 pub use canonical::{AggressorSide, Granularity, Instrument, MarketEvent, Px, Qty, Trade, Ts};
 pub use error::ConfigError;
-pub use extension::Subscriber;
+pub use extension::{ChannelSink, FnSubscriber, Subscriber};
 pub use orderflow::{BarComponent, Cvd, Delta, Footprint, VolumeProfile};
 pub use period::{
     AlignedTimePeriod, Boundary, DollarPeriod, Period, RangePeriod, RenkoPeriod, TickPeriod,

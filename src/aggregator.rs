@@ -158,13 +158,15 @@ impl SymbolAggregator {
         for slot in &mut self.slots {
             match slot.period.on_trade(t) {
                 Boundary::Continue => {
-                    slot.current
+                    let bar = slot
+                        .current
                         .as_mut()
-                        .expect("barre courante absente après ouverture")
-                        .add(t);
+                        .expect("barre courante absente après ouverture");
+                    bar.add(t);
                     for lens in &mut slot.lenses {
                         lens.on_trade(t);
                     }
+                    notify_update(&mut self.subscribers, &slot.label, bar);
                 }
                 Boundary::CloseAndOpen {
                     start,
@@ -184,6 +186,7 @@ impl SymbolAggregator {
                     for lens in &mut slot.lenses {
                         lens.on_trade(t);
                     }
+                    notify_update(&mut self.subscribers, &slot.label, &bar);
                     slot.current = Some(bar);
                 }
             }
@@ -208,5 +211,11 @@ impl SymbolAggregator {
 fn notify(subscribers: &mut [Box<dyn Subscriber>], label: &str, bar: &Bar) {
     for sub in subscribers.iter_mut() {
         sub.on_bar_close(label, bar);
+    }
+}
+
+fn notify_update(subscribers: &mut [Box<dyn Subscriber>], label: &str, bar: &Bar) {
+    for sub in subscribers.iter_mut() {
+        sub.on_bar_update(label, bar);
     }
 }

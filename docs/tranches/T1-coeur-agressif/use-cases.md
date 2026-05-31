@@ -41,8 +41,10 @@ Cumul inter-barres, porté par l'agrégateur. *Fiches* : `DC-2`.
 ### `UC-T1-15` — `on_bar_update` (barre en formation)
 Le subscriber est notifié à chaque trade intégré, pas seulement à la clôture. *Fiches* : `AGG-B3`, `EXT-2`.
 
-### `UC-T1-16` — Dispatch **générique zero-cost**
-Abonnement monomorphisé, sans `Box<dyn>` ni allocation dans le hot path. *Fiches* : `EXT-3`, `TR-1`, `TR-2`.
+### `UC-T1-16` — Dispatch **générique zero-cost** — ⏭️ **reporté en T4**
+Abonnement monomorphisé, sans `Box<dyn>` dans le hot path. *Fiches* : `EXT-3`, `TR-2`.
+Optimisation transverse (généraliser `Period`/`Subscriber`) à faire avec benchmarks → T4.
+`TR-1` (zéro-alloc par trade) est déjà tenu.
 
 ### `UC-T1-17` — Adaptateur **channel** (push, multi-consommateurs)
 Émettre les barres vers un `std::sync::mpsc` / `crossbeam`. *Fiches* : `EXT-4`.
