@@ -80,6 +80,31 @@ fn lenses_are_composed_and_attached_to_bars() {
     assert!(bars[1].partial, "dernière barre fermée par finish()");
 }
 
+// UC-T3-5..8 (intégration) : la lentille TPO s'attache à la barre.
+#[test]
+fn tpo_lens_attached_to_bar() {
+    let rec = Recorder(Rc::new(RefCell::new(Vec::new())));
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_period_and_lenses(
+            Box::new(TimePeriod::new(1000)),
+            vec![LensKind::Tpo {
+                bracket_ns: 100,
+                ib_brackets: 2,
+            }],
+        )
+        .build()
+        .unwrap();
+    agg.subscribe(Box::new(rec.clone()));
+    agg.process(&trade(0, 100, 1, AggressorSide::Buy));
+    agg.process(&trade(150, 101, 1, AggressorSide::Buy));
+    agg.finish();
+
+    let bars = rec.0.borrow();
+    assert_eq!(bars.len(), 1);
+    let tpo = bars[0].orderflow.tpo.as_ref().expect("TPO présent");
+    assert!(tpo.poc().is_some());
+}
+
 #[test]
 fn no_lenses_means_empty_orderflow() {
     let rec = Recorder(Rc::new(RefCell::new(Vec::new())));
