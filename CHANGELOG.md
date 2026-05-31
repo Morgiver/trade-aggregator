@@ -22,5 +22,9 @@ On consigne les **changements notables** (fin de phase, tranche réalisée, déc
   `docs/architecture/` (aucune feature orpheline). Issue #5 close.
 - **Phase 6 — Priorisation** : `docs/roadmap.md` (tranches T0→T4 ordonnées). Issue #6
   close. **Partie documentaire (Phases 1→6) terminée.**
-- Démarrage de la **Phase 7 — Réalisation** (issue #7) — tranche **T0 walking skeleton**
-  sur branche `tranche/T0-walking-skeleton` : use-cases posés.
+- Démarrage de la **Phase 7 — Réalisation** (issue #7).
+- **Tranche T0 — walking skeleton** : crate Rust (édition 2024) — modèle canonique,
+  `TimePeriod`, `Bar`/OHLCV, `SymbolAggregator` (routage, fan-out, fail-fast, flush),
+  `Subscriber`, et mapping **DataBento** (`dbn`, feature `databento`). Pipeline
+  `trades → barres temporelles → on_bar_close` en replay. Tests : 7 d'intégration
+  synthétiques + 1 réel optionnel (validé sur NQ : 8703 trades → 60 barres 1-min).

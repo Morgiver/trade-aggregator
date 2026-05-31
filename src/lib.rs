@@ -16,8 +16,10 @@ pub mod error;
 pub mod extension;
 pub mod period;
 
-// NOTE: le module `databento` (mapping DBN → modèle canonique, fiches CAN-8/9/11)
-// arrive au prochain incrément de T0, derrière la feature `databento`.
+/// Mapping DataBento (DBN → modèle canonique), isolé derrière la feature `databento`
+/// (fiches `CAN-8`/`CAN-11`/`CAN-12`).
+#[cfg(feature = "databento")]
+pub mod databento;
 
 pub use aggregator::{Builder, SymbolAggregator};
 pub use bar::{Bar, Ohlcv};

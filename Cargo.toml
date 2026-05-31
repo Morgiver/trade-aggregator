@@ -10,6 +10,7 @@ publish = false
 [features]
 default = []
 # Mapping DataBento (crate `dbn`) — isolé, activé à la demande.
-databento = []
+databento = ["dep:dbn"]
 
 [dependencies]
+dbn = { version = "0.43", optional = true }
