@@ -12,6 +12,30 @@ natures variées de données. Deux piliers fonctionnels + un pilier d'extensibil
 réactif** permettant à n'importe qui de brancher SES calculs temps réel sur les données
 agrégées (le layer d'indicateurs lui-même = un autre projet).
 
+## Modèle conceptuel (proposé par Morgan, à affiner en Phase Domaine)
+
+Dualité fondamentale de la microstructure : qui **consomme** la liquidité (agressif)
+vs qui la **fournit** (passif).
+
+```
+SymbolAggregator { instrument definition }      (1 par symbole)
+ ├── AggressorAggregator (tape / trades) → N agrégations périodiques // + footprint + TPO
+ └── PassiveAggregator   (book / MBO)    → reconstruction du carnet → N profils de liquidité
+        ↘ point d'extension réactif branché sur les deux ↙
+```
+
+- **Une seule source, un routage** : sur DataBento MBO, trades ET events de book sont
+  dans le même flux horodaté → `SymbolAggregator.process(event)` route Trade→Aggressor,
+  Add/Cancel/Modify→Passive, puis fan-out vers N périodes.
+- **Reconstruction du carnet** (cœur du PassiveAggregator) : maintenir le book depuis
+  MBO avant d'en dériver des agrégats. Prior art : guide officiel DataBento
+  « Constructing the LOB », crates `hftbacktest`, `OrderBook-rs`, RustQuant.
+- **Instrument definition** (tick size, price increment, lot/contract size,
+  multiplicateur, devise) — schéma DataBento `definition` ; cale les niveaux de prix et
+  le notional.
+- **Multi-charts** : plusieurs agrégations périodiques en parallèle sur un même symbole
+  (timeframes, TPO, volume bars…) — comme un trader avec plusieurs charts.
+
 ## Features en vrac
 
 ### Types d'agrégation périodique (à lister exhaustivement — 1ʳᵉ tâche)
@@ -74,12 +98,18 @@ agrégées (le layer d'indicateurs lui-même = un autre projet).
 
 ## Questions ouvertes
 
-1. **Rôle de l'orderbook complet** : (a) enrichir l'order flow des barres de trades,
-   (b) objet de premier plan qu'on agrège/profile aussi (voire familles d'agrégation
-   basées book), ou les deux ? → **question structurante**.
-2. **Normaliseurs vs trait d'entrée** : la crate fournit-elle des adapters de format
-   (DataBento via `dbn`, schémas Binance/Bybit/Coinbase) vers un modèle interne unifié,
-   ou juste un trait d'entrée que l'utilisateur mappe ? (réseau exclu dans tous les cas)
-3. **Mono vs multi-symboles** : reco = brique `Aggregator` mono-instrument composable en
-   multi (un par symbole) plutôt qu'un cœur multi monolithique. À valider.
-4. **Mécanisme d'exposition** : point d'extension unique + adaptateurs — à confirmer.
+1. **Rôle de l'orderbook** : ✅ tranché → le book est un objet agrégé de premier plan
+   (`PassiveAggregator`), en plus de l'order flow agressif (`AggressorAggregator`).
+2. **Reconstruction du carnet in-scope ?** Probablement oui (cœur du Passive). Et :
+   « à notre manière » comme l'agrégation, ou on s'autorise à s'appuyer sur le prior art
+   LOB *pour la reconstruction* (problème générique distinct) ? — à confirmer.
+3. **Métriques cross-aggregator** (absorption, icebergs/refills) : reco = la crate
+   **aligne** les deux côtés (event-time, bornes de barre) et le **consommateur** calcule
+   via le point d'extension ; pas de primitives cross fournies. — à confirmer.
+4. **Normaliseurs vs trait d'entrée** : adapters de format (DataBento via `dbn`, schémas
+   Binance/Bybit/Coinbase) vers un modèle interne unifié, ou juste un trait d'entrée que
+   l'utilisateur mappe ? (réseau exclu dans tous les cas)
+5. **Mécanisme d'exposition** : point d'extension unique + adaptateurs (push/pull,
+   on_close/on_update) — à confirmer.
+
+> TPO côté Aggressor : ✅ acté. Mono/multi-symboles : ✅ brique mono composable en multi.
