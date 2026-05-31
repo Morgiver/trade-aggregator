@@ -1,6 +1,7 @@
 //! La `Bar` : unité agrégée produite par une `Period` (fiches `AGG-B1`, `AGG-B2`).
 
 use crate::canonical::{Px, Qty, Trade, Ts};
+use crate::orderflow::OrderFlow;
 
 /// Open / High / Low / Close / Volume d'une barre (fiche `AGG-B2`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -13,7 +14,7 @@ pub struct Ohlcv {
 }
 
 /// Une barre agrégée. États : *en formation* puis *fermée* (fiche `AGG-B1`).
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq)]
 pub struct Bar {
     /// Borne basse (incluse) de la fenêtre, event-time.
     pub start: Ts,
@@ -23,6 +24,8 @@ pub struct Bar {
     /// `true` si la barre a été fermée par un *flush* de fin de flux (fiche `SYM-11`),
     /// donc potentiellement incomplète.
     pub partial: bool,
+    /// Résultats order flow des lentilles actives sur la période (vide si aucune).
+    pub orderflow: OrderFlow,
 }
 
 impl Bar {
@@ -39,11 +42,17 @@ impl Bar {
                 volume: first.size,
             },
             partial: false,
+            orderflow: OrderFlow::default(),
         }
     }
 
     /// Intègre un trade dans la barre en formation.
     pub(crate) fn add(&mut self, t: &Trade) {
+        // `end` suit le dernier trade pour les barres sans fenêtre fixe (tick/volume/…) ;
+        // pour les barres temporelles, `ts < end` (borne de fenêtre) → inchangé.
+        if t.ts > self.end {
+            self.end = t.ts;
+        }
         let o = &mut self.ohlcv;
         if t.price > o.high {
             o.high = t.price;

@@ -14,6 +14,7 @@ pub mod bar;
 pub mod canonical;
 pub mod error;
 pub mod extension;
+pub mod orderflow;
 pub mod period;
 
 /// Mapping DataBento (DBN → modèle canonique), isolé derrière la feature `databento`
@@ -25,5 +26,9 @@ pub use aggregator::{Builder, SymbolAggregator};
 pub use bar::{Bar, Ohlcv};
 pub use canonical::{AggressorSide, Granularity, Instrument, MarketEvent, Px, Qty, Trade, Ts};
 pub use error::ConfigError;
-pub use extension::Subscriber;
-pub use period::{Boundary, Period, TimePeriod};
+pub use extension::{ChannelSink, FnSubscriber, Subscriber};
+pub use orderflow::{BarComponent, Cvd, Delta, Footprint, VolumeProfile};
+pub use period::{
+    AlignedTimePeriod, Boundary, DollarPeriod, Period, RangePeriod, RenkoPeriod, TickPeriod,
+    TimePeriod, VolumePeriod,
+};

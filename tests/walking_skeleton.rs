@@ -39,7 +39,7 @@ impl Recorder {
 
 impl Subscriber for Recorder {
     fn on_bar_close(&mut self, period: &str, bar: &Bar) {
-        self.0.borrow_mut().push((period.to_string(), *bar));
+        self.0.borrow_mut().push((period.to_string(), bar.clone()));
     }
 }
 

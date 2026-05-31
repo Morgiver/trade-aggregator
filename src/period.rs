@@ -1,6 +1,6 @@
 //! La `Period` : règle qui décide quand une `Bar` se ferme (fiches `AGG-P0`, `AGG-P1`).
 
-use crate::canonical::{Granularity, Trade, Ts};
+use crate::canonical::{Granularity, Px, Qty, Trade, Ts};
 
 /// Résultat de l'examen d'un trade par une `Period`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -8,7 +8,9 @@ pub enum Boundary {
     /// Le trade appartient à la barre courante.
     Continue,
     /// Le trade ouvre une nouvelle barre `[start, end)` : fermer la courante d'abord.
-    CloseAndOpen { start: Ts, end: Ts },
+    /// `partial` = la nouvelle barre démarre incomplète (entrée en cours de fenêtre,
+    /// fiche `AGG-B5`).
+    CloseAndOpen { start: Ts, end: Ts, partial: bool },
 }
 
 /// Contrat commun des règles de période (fiche `AGG-P0`).
@@ -64,6 +66,7 @@ impl Period for TimePeriod {
                 Boundary::CloseAndOpen {
                     start: end - self.interval_ns,
                     end,
+                    partial: false,
                 }
             }
             Some(base) => {
@@ -73,7 +76,11 @@ impl Period for TimePeriod {
                     let end = self.window_end_for(base, t.ts);
                     let start = end - self.interval_ns;
                     self.current_end = end;
-                    Boundary::CloseAndOpen { start, end }
+                    Boundary::CloseAndOpen {
+                        start,
+                        end,
+                        partial: false,
+                    }
                 }
             }
         }
@@ -81,5 +88,393 @@ impl Period for TimePeriod {
 
     fn label(&self) -> String {
         format!("time:{}ns", self.interval_ns)
+    }
+}
+
+/// Barres temporelles **alignées sur l'horloge** : fenêtres
+/// `[k·interval, (k+1)·interval)` (multiples de l'epoch), fiche `AGG-P2`.
+///
+/// La **première** barre est marquée *partielle* (`AGG-B5`) si le flux démarre en cours
+/// de fenêtre (premier trade non aligné sur une borne).
+pub struct AlignedTimePeriod {
+    interval_ns: i64,
+    current_end: Option<Ts>,
+}
+
+impl AlignedTimePeriod {
+    pub fn new(interval_ns: i64) -> Self {
+        assert!(interval_ns > 0, "interval_ns doit être > 0");
+        AlignedTimePeriod {
+            interval_ns,
+            current_end: None,
+        }
+    }
+
+    fn window(&self, ts: Ts) -> (Ts, Ts) {
+        let start = ts.div_euclid(self.interval_ns) * self.interval_ns;
+        (start, start + self.interval_ns)
+    }
+}
+
+impl Period for AlignedTimePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        let (start, end) = self.window(t.ts);
+        match self.current_end {
+            None => {
+                self.current_end = Some(end);
+                // Partielle si le flux n'a pas démarré pile sur la borne de fenêtre.
+                Boundary::CloseAndOpen {
+                    start,
+                    end,
+                    partial: t.ts != start,
+                }
+            }
+            Some(ce) if t.ts < ce => Boundary::Continue,
+            Some(_) => {
+                self.current_end = Some(end);
+                Boundary::CloseAndOpen {
+                    start,
+                    end,
+                    partial: false,
+                }
+            }
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("aligned-time:{}ns", self.interval_ns)
+    }
+}
+
+/// Barres par **nombre de trades** (fiche `AGG-P4`) : `n` trades par barre.
+pub struct TickPeriod {
+    n: u64,
+    count: u64,
+}
+
+impl TickPeriod {
+    pub fn new(n: u64) -> Self {
+        assert!(n > 0, "n doit être > 0");
+        TickPeriod { n, count: 0 }
+    }
+}
+
+impl Period for TickPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if self.count == 0 || self.count >= self.n {
+            self.count = 1;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.count += 1;
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("tick:{}", self.n)
+    }
+}
+
+/// Barres par **volume échangé** (fiche `AGG-P5`) : ferme dès que le volume cumulé
+/// atteint `threshold` (la barre inclut le trade qui franchit le seuil).
+pub struct VolumePeriod {
+    threshold: Qty,
+    acc: Qty,
+    open: bool,
+}
+
+impl VolumePeriod {
+    pub fn new(threshold: Qty) -> Self {
+        assert!(threshold > 0, "threshold doit être > 0");
+        VolumePeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+}
+
+impl Period for VolumePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || self.acc >= self.threshold {
+            self.open = true;
+            self.acc = t.size;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.acc += t.size;
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("volume:{}", self.threshold)
+    }
+}
+
+/// Barres par **valeur échangée / notional** (fiche `AGG-P6`) : `Σ price·size`.
+pub struct DollarPeriod {
+    threshold: i128,
+    acc: i128,
+    open: bool,
+}
+
+impl DollarPeriod {
+    pub fn new(threshold: i128) -> Self {
+        assert!(threshold > 0, "threshold doit être > 0");
+        DollarPeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+
+    fn notional(t: &Trade) -> i128 {
+        (t.price as i128) * (t.size as i128)
+    }
+}
+
+impl Period for DollarPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || self.acc >= self.threshold {
+            self.open = true;
+            self.acc = Self::notional(t);
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.acc += Self::notional(t);
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("dollar:{}", self.threshold)
+    }
+}
+
+/// Barres de **range de prix** (fiche `AGG-P7`) : l'amplitude `high − low` d'une barre
+/// reste ≤ `range`. Le trade qui ferait dépasser le range ouvre une nouvelle barre.
+pub struct RangePeriod {
+    range: i64,
+    lo: Px,
+    hi: Px,
+    open: bool,
+}
+
+impl RangePeriod {
+    pub fn new(range: i64) -> Self {
+        assert!(range > 0, "range doit être > 0");
+        RangePeriod {
+            range,
+            lo: 0,
+            hi: 0,
+            open: false,
+        }
+    }
+}
+
+impl Period for RangePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open {
+            self.open = true;
+            self.lo = t.price;
+            self.hi = t.price;
+            return Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            };
+        }
+        let new_hi = self.hi.max(t.price);
+        let new_lo = self.lo.min(t.price);
+        if new_hi - new_lo > self.range {
+            // Le trade dépasse le range → il ouvre une nouvelle barre.
+            self.lo = t.price;
+            self.hi = t.price;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.hi = new_hi;
+            self.lo = new_lo;
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("range:{}", self.range)
+    }
+}
+
+/// Barres **Renko** simplifiées (fiche `AGG-P8`) : nouvelle brique quand le prix s'écarte
+/// d'au moins `brick` du prix d'ouverture de la barre courante.
+///
+/// *Note* : version simplifiée (référence = prix d'ouverture de la barre), à affiner
+/// ultérieurement (grille de briques, multi-briques par saut) si le besoin émerge.
+pub struct RenkoPeriod {
+    brick: i64,
+    reference: Px,
+    open: bool,
+}
+
+impl RenkoPeriod {
+    pub fn new(brick: i64) -> Self {
+        assert!(brick > 0, "brick doit être > 0");
+        RenkoPeriod {
+            brick,
+            reference: 0,
+            open: false,
+        }
+    }
+}
+
+impl Period for RenkoPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || (t.price - self.reference).abs() >= self.brick {
+            self.open = true;
+            self.reference = t.price;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("renko:{}", self.brick)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::canonical::AggressorSide;
+
+    fn tr(ts: Ts) -> Trade {
+        Trade {
+            ts,
+            price: 100,
+            size: 1,
+            aggressor: AggressorSide::Buy,
+            instrument_id: 1,
+        }
+    }
+
+    // AGG-P2 + AGG-B5 : fenêtres alignées sur l'horloge, première barre partielle.
+    #[test]
+    fn aligned_time_period_windows_and_partial_first_bar() {
+        let mut p = AlignedTimePeriod::new(100);
+        // Premier trade à ts=150 → fenêtre [100,200), barre partielle (démarrage en cours).
+        assert_eq!(
+            p.on_trade(&tr(150)),
+            Boundary::CloseAndOpen {
+                start: 100,
+                end: 200,
+                partial: true
+            }
+        );
+        // ts=180 reste dans la fenêtre.
+        assert_eq!(p.on_trade(&tr(180)), Boundary::Continue);
+        // ts=230 → nouvelle fenêtre [200,300), complète.
+        assert_eq!(
+            p.on_trade(&tr(230)),
+            Boundary::CloseAndOpen {
+                start: 200,
+                end: 300,
+                partial: false
+            }
+        );
+    }
+
+    #[test]
+    fn aligned_first_bar_on_boundary_is_not_partial() {
+        let mut p = AlignedTimePeriod::new(100);
+        assert_eq!(
+            p.on_trade(&tr(200)),
+            Boundary::CloseAndOpen {
+                start: 200,
+                end: 300,
+                partial: false
+            }
+        );
+    }
+
+    fn trv(ts: Ts, price: i64, size: u64) -> Trade {
+        Trade {
+            ts,
+            price,
+            size,
+            aggressor: AggressorSide::Buy,
+            instrument_id: 1,
+        }
+    }
+
+    fn closes(b: Boundary) -> bool {
+        matches!(b, Boundary::CloseAndOpen { .. })
+    }
+
+    // AGG-P4 : barres de n trades.
+    #[test]
+    fn tick_period_n_trades_per_bar() {
+        let mut p = TickPeriod::new(3);
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ouvre barre 1
+        assert!(!closes(p.on_trade(&trv(1, 100, 1)))); // 2e
+        assert!(!closes(p.on_trade(&trv(2, 100, 1)))); // 3e (barre pleine)
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // ferme barre 1, ouvre barre 2
+    }
+
+    // AGG-P5 : barres de volume (inclut le trade qui franchit le seuil).
+    #[test]
+    fn volume_period_closes_after_threshold() {
+        let mut p = VolumePeriod::new(10);
+        assert!(closes(p.on_trade(&trv(0, 100, 4)))); // acc 4
+        assert!(!closes(p.on_trade(&trv(1, 100, 4)))); // acc 8
+        assert!(!closes(p.on_trade(&trv(2, 100, 5)))); // acc 13 ≥ 10 (inclus)
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // trade suivant → ferme/ouvre
+    }
+
+    // AGG-P6 : barres de notional (Σ price·size).
+    #[test]
+    fn dollar_period_closes_after_notional() {
+        let mut p = DollarPeriod::new(1_000);
+        assert!(closes(p.on_trade(&trv(0, 100, 4)))); // 400
+        assert!(!closes(p.on_trade(&trv(1, 100, 5)))); // 900
+        assert!(!closes(p.on_trade(&trv(2, 100, 2)))); // 1100 ≥ 1000
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // suivant → ferme/ouvre
+    }
+
+    // AGG-P7 : barres de range (amplitude ≤ range).
+    #[test]
+    fn range_period_closes_when_span_exceeds_range() {
+        let mut p = RangePeriod::new(5);
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ouvre, lo=hi=100
+        assert!(!closes(p.on_trade(&trv(1, 103, 1)))); // span 3 ≤ 5
+        assert!(!closes(p.on_trade(&trv(2, 105, 1)))); // span 5 ≤ 5
+        assert!(closes(p.on_trade(&trv(3, 106, 1)))); // span 6 > 5 → nouvelle barre
+    }
+
+    // AGG-P8 : barres Renko (écart ≥ brick depuis l'ouverture).
+    #[test]
+    fn renko_period_closes_on_brick_move() {
+        let mut p = RenkoPeriod::new(10);
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ref=100
+        assert!(!closes(p.on_trade(&trv(1, 105, 1)))); // |+5| < 10
+        assert!(closes(p.on_trade(&trv(2, 110, 1)))); // |+10| ≥ 10 → nouvelle brique
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // |−10| ≥ 10 → nouvelle brique
     }
 }
