@@ -48,6 +48,11 @@ impl Bar {
 
     /// Intègre un trade dans la barre en formation.
     pub(crate) fn add(&mut self, t: &Trade) {
+        // `end` suit le dernier trade pour les barres sans fenêtre fixe (tick/volume/…) ;
+        // pour les barres temporelles, `ts < end` (borne de fenêtre) → inchangé.
+        if t.ts > self.end {
+            self.end = t.ts;
+        }
         let o = &mut self.ohlcv;
         if t.price > o.high {
             o.high = t.price;

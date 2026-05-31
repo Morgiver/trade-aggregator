@@ -1,6 +1,6 @@
 //! La `Period` : règle qui décide quand une `Bar` se ferme (fiches `AGG-P0`, `AGG-P1`).
 
-use crate::canonical::{Granularity, Trade, Ts};
+use crate::canonical::{Granularity, Qty, Trade, Ts};
 
 /// Résultat de l'examen d'un trade par une `Period`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -146,6 +146,122 @@ impl Period for AlignedTimePeriod {
     }
 }
 
+/// Barres par **nombre de trades** (fiche `AGG-P4`) : `n` trades par barre.
+pub struct TickPeriod {
+    n: u64,
+    count: u64,
+}
+
+impl TickPeriod {
+    pub fn new(n: u64) -> Self {
+        assert!(n > 0, "n doit être > 0");
+        TickPeriod { n, count: 0 }
+    }
+}
+
+impl Period for TickPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if self.count == 0 || self.count >= self.n {
+            self.count = 1;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.count += 1;
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("tick:{}", self.n)
+    }
+}
+
+/// Barres par **volume échangé** (fiche `AGG-P5`) : ferme dès que le volume cumulé
+/// atteint `threshold` (la barre inclut le trade qui franchit le seuil).
+pub struct VolumePeriod {
+    threshold: Qty,
+    acc: Qty,
+    open: bool,
+}
+
+impl VolumePeriod {
+    pub fn new(threshold: Qty) -> Self {
+        assert!(threshold > 0, "threshold doit être > 0");
+        VolumePeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+}
+
+impl Period for VolumePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || self.acc >= self.threshold {
+            self.open = true;
+            self.acc = t.size;
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.acc += t.size;
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("volume:{}", self.threshold)
+    }
+}
+
+/// Barres par **valeur échangée / notional** (fiche `AGG-P6`) : `Σ price·size`.
+pub struct DollarPeriod {
+    threshold: i128,
+    acc: i128,
+    open: bool,
+}
+
+impl DollarPeriod {
+    pub fn new(threshold: i128) -> Self {
+        assert!(threshold > 0, "threshold doit être > 0");
+        DollarPeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+
+    fn notional(t: &Trade) -> i128 {
+        (t.price as i128) * (t.size as i128)
+    }
+}
+
+impl Period for DollarPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || self.acc >= self.threshold {
+            self.open = true;
+            self.acc = Self::notional(t);
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            self.acc += Self::notional(t);
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("dollar:{}", self.threshold)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -198,5 +314,49 @@ mod tests {
                 partial: false
             }
         );
+    }
+
+    fn trv(ts: Ts, price: i64, size: u64) -> Trade {
+        Trade {
+            ts,
+            price,
+            size,
+            aggressor: AggressorSide::Buy,
+            instrument_id: 1,
+        }
+    }
+
+    fn closes(b: Boundary) -> bool {
+        matches!(b, Boundary::CloseAndOpen { .. })
+    }
+
+    // AGG-P4 : barres de n trades.
+    #[test]
+    fn tick_period_n_trades_per_bar() {
+        let mut p = TickPeriod::new(3);
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ouvre barre 1
+        assert!(!closes(p.on_trade(&trv(1, 100, 1)))); // 2e
+        assert!(!closes(p.on_trade(&trv(2, 100, 1)))); // 3e (barre pleine)
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // ferme barre 1, ouvre barre 2
+    }
+
+    // AGG-P5 : barres de volume (inclut le trade qui franchit le seuil).
+    #[test]
+    fn volume_period_closes_after_threshold() {
+        let mut p = VolumePeriod::new(10);
+        assert!(closes(p.on_trade(&trv(0, 100, 4)))); // acc 4
+        assert!(!closes(p.on_trade(&trv(1, 100, 4)))); // acc 8
+        assert!(!closes(p.on_trade(&trv(2, 100, 5)))); // acc 13 ≥ 10 (inclus)
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // trade suivant → ferme/ouvre
+    }
+
+    // AGG-P6 : barres de notional (Σ price·size).
+    #[test]
+    fn dollar_period_closes_after_notional() {
+        let mut p = DollarPeriod::new(1_000);
+        assert!(closes(p.on_trade(&trv(0, 100, 4)))); // 400
+        assert!(!closes(p.on_trade(&trv(1, 100, 5)))); // 900
+        assert!(!closes(p.on_trade(&trv(2, 100, 2)))); // 1100 ≥ 1000
+        assert!(closes(p.on_trade(&trv(3, 100, 1)))); // suivant → ferme/ouvre
     }
 }
