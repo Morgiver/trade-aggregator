@@ -1,6 +1,15 @@
 //! La `Period` : règle qui décide quand une `Bar` se ferme (fiches `AGG-P0`, `AGG-P1`).
 
-use crate::canonical::{Granularity, Px, Qty, Trade, Ts};
+use crate::canonical::{AggressorSide, Granularity, Px, Qty, Trade, Ts};
+
+/// Signe agressif d'un trade : `+1` Buy, `−1` Sell, `0` inconnu.
+fn signed(t: &Trade) -> i64 {
+    match t.aggressor {
+        AggressorSide::Buy => 1,
+        AggressorSide::Sell => -1,
+        AggressorSide::Unknown => 0,
+    }
+}
 
 /// Résultat de l'examen d'un trade par une `Period`.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -360,10 +369,232 @@ impl Period for RenkoPeriod {
     }
 }
 
+/// Borne « decide-before-add » pour les périodes à seuil signé : ferme si la barre
+/// courante a déjà atteint le seuil, sinon continue.
+macro_rules! threshold_boundary {
+    ($self:ident, $t:ident, $acc:expr, $reset:expr, $reached:expr) => {{
+        if !$self.open || $reached {
+            $self.open = true;
+            $acc = $reset;
+            Boundary::CloseAndOpen {
+                start: $t.ts,
+                end: $t.ts,
+                partial: false,
+            }
+        } else {
+            $acc += $reset;
+            Boundary::Continue
+        }
+    }};
+}
+
+/// Barres **tick imbalance** (fiche `AGG-P10`) : ferme quand `|Σ signe| ≥ seuil`.
+pub struct TickImbalancePeriod {
+    threshold: i64,
+    acc: i64,
+    open: bool,
+}
+impl TickImbalancePeriod {
+    pub fn new(threshold: i64) -> Self {
+        assert!(threshold > 0);
+        TickImbalancePeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+}
+impl Period for TickImbalancePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        let reached = self.acc.abs() >= self.threshold;
+        threshold_boundary!(self, t, self.acc, signed(t), reached)
+    }
+    fn label(&self) -> String {
+        format!("tick-imbalance:{}", self.threshold)
+    }
+}
+
+/// Barres **volume imbalance** (fiche `AGG-P11`) : `Σ signe·size`.
+pub struct VolumeImbalancePeriod {
+    threshold: i64,
+    acc: i64,
+    open: bool,
+}
+impl VolumeImbalancePeriod {
+    pub fn new(threshold: i64) -> Self {
+        assert!(threshold > 0);
+        VolumeImbalancePeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+}
+impl Period for VolumeImbalancePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        let reached = self.acc.abs() >= self.threshold;
+        threshold_boundary!(self, t, self.acc, signed(t) * t.size as i64, reached)
+    }
+    fn label(&self) -> String {
+        format!("volume-imbalance:{}", self.threshold)
+    }
+}
+
+/// Barres **dollar imbalance** (fiche `AGG-P12`) : `Σ signe·price·size` (notional).
+pub struct DollarImbalancePeriod {
+    threshold: i128,
+    acc: i128,
+    open: bool,
+}
+impl DollarImbalancePeriod {
+    pub fn new(threshold: i128) -> Self {
+        assert!(threshold > 0);
+        DollarImbalancePeriod {
+            threshold,
+            acc: 0,
+            open: false,
+        }
+    }
+}
+impl Period for DollarImbalancePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        let reached = self.acc.abs() >= self.threshold;
+        let contrib = signed(t) as i128 * t.price as i128 * t.size as i128;
+        threshold_boundary!(self, t, self.acc, contrib, reached)
+    }
+    fn label(&self) -> String {
+        format!("dollar-imbalance:{}", self.threshold)
+    }
+}
+
+/// Barres **run** (fiche `AGG-P13`, simplifiées) : ferme quand une série directionnelle
+/// consécutive (même côté) atteint `threshold` trades.
+pub struct RunPeriod {
+    threshold: u64,
+    run: u64,
+    dir: i64,
+    open: bool,
+}
+impl RunPeriod {
+    pub fn new(threshold: u64) -> Self {
+        assert!(threshold > 0);
+        RunPeriod {
+            threshold,
+            run: 0,
+            dir: 0,
+            open: false,
+        }
+    }
+    fn start(&mut self, s: i64) {
+        self.dir = s;
+        self.run = if s != 0 { 1 } else { 0 };
+    }
+}
+impl Period for RunPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        let s = signed(t);
+        if !self.open || self.run >= self.threshold {
+            self.open = true;
+            self.start(s);
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            if s != 0 && s == self.dir {
+                self.run += 1;
+            } else {
+                self.start(s);
+            }
+            Boundary::Continue
+        }
+    }
+    fn label(&self) -> String {
+        format!("run:{}", self.threshold)
+    }
+}
+
+/// Barres **Point & Figure** (fiche `AGG-P9`, simplifiées) : chaque barre = une colonne
+/// directionnelle (X montante / O descendante). La barre se ferme au **renversement** du
+/// prix d'au moins `reversal × box_size` contre la tendance de la colonne.
+///
+/// *Note* : version simplifiée (pas de grille de box stricte ni de filtrage à la box) —
+/// raffinement ultérieur si besoin.
+pub struct PointFigurePeriod {
+    box_size: i64,
+    reversal: i64,
+    dir: i64,
+    extreme: Px,
+    open: bool,
+}
+impl PointFigurePeriod {
+    pub fn new(box_size: i64, reversal: i64) -> Self {
+        assert!(box_size > 0 && reversal > 0);
+        PointFigurePeriod {
+            box_size,
+            reversal,
+            dir: 0,
+            extreme: 0,
+            open: false,
+        }
+    }
+    fn open_at(&mut self, t: &Trade, dir: i64) -> Boundary {
+        self.open = true;
+        self.dir = dir;
+        self.extreme = t.price;
+        Boundary::CloseAndOpen {
+            start: t.ts,
+            end: t.ts,
+            partial: false,
+        }
+    }
+}
+impl Period for PointFigurePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open {
+            return self.open_at(t, 0);
+        }
+        let rev = self.reversal * self.box_size;
+        match self.dir {
+            // Direction non encore établie : on l'établit au 1er mouvement ≥ box.
+            0 => {
+                if (t.price - self.extreme).abs() >= self.box_size {
+                    self.dir = (t.price - self.extreme).signum();
+                    self.extreme = t.price;
+                }
+                Boundary::Continue
+            }
+            d if d > 0 => {
+                if t.price > self.extreme {
+                    self.extreme = t.price;
+                    Boundary::Continue
+                } else if self.extreme - t.price >= rev {
+                    self.open_at(t, -1) // renversement → nouvelle colonne (O)
+                } else {
+                    Boundary::Continue
+                }
+            }
+            _ => {
+                if t.price < self.extreme {
+                    self.extreme = t.price;
+                    Boundary::Continue
+                } else if t.price - self.extreme >= rev {
+                    self.open_at(t, 1) // renversement → nouvelle colonne (X)
+                } else {
+                    Boundary::Continue
+                }
+            }
+        }
+    }
+    fn label(&self) -> String {
+        format!("pnf:{}:{}", self.box_size, self.reversal)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::canonical::AggressorSide;
 
     fn tr(ts: Ts) -> Trade {
         Trade {
@@ -476,5 +707,66 @@ mod tests {
         assert!(!closes(p.on_trade(&trv(1, 105, 1)))); // |+5| < 10
         assert!(closes(p.on_trade(&trv(2, 110, 1)))); // |+10| ≥ 10 → nouvelle brique
         assert!(closes(p.on_trade(&trv(3, 100, 1)))); // |−10| ≥ 10 → nouvelle brique
+    }
+
+    fn tside(price: i64, size: u64, side: AggressorSide) -> Trade {
+        Trade {
+            ts: 0,
+            price,
+            size,
+            aggressor: side,
+            instrument_id: 1,
+        }
+    }
+
+    // AGG-P10 : tick imbalance (Σ signe).
+    #[test]
+    fn tick_imbalance_closes_on_threshold() {
+        use AggressorSide::{Buy, Sell};
+        let mut p = TickImbalancePeriod::new(2);
+        assert!(closes(p.on_trade(&tside(100, 1, Buy)))); // acc +1, ouvre
+        assert!(!closes(p.on_trade(&tside(100, 1, Buy)))); // acc +2 (≥2)
+        assert!(closes(p.on_trade(&tside(100, 1, Sell)))); // seuil atteint → ferme/ouvre
+    }
+
+    // AGG-P11 : volume imbalance (Σ signe·size).
+    #[test]
+    fn volume_imbalance_closes_on_threshold() {
+        use AggressorSide::{Buy, Sell};
+        let mut p = VolumeImbalancePeriod::new(10);
+        assert!(closes(p.on_trade(&tside(100, 4, Sell)))); // acc -4, ouvre
+        assert!(!closes(p.on_trade(&tside(100, 7, Sell)))); // acc -11 (|.|≥10)
+        assert!(closes(p.on_trade(&tside(100, 1, Buy)))); // ferme/ouvre
+    }
+
+    // AGG-P12 : dollar imbalance (Σ signe·price·size).
+    #[test]
+    fn dollar_imbalance_closes_on_threshold() {
+        use AggressorSide::Buy;
+        let mut p = DollarImbalancePeriod::new(1_000);
+        assert!(closes(p.on_trade(&tside(100, 4, Buy)))); // +400, ouvre
+        assert!(!closes(p.on_trade(&tside(100, 8, Buy)))); // +1200 (≥1000)
+        assert!(closes(p.on_trade(&tside(100, 1, Buy)))); // ferme/ouvre
+    }
+
+    // AGG-P13 : run bars (série directionnelle).
+    #[test]
+    fn run_period_closes_on_run_length() {
+        use AggressorSide::{Buy, Sell};
+        let mut p = RunPeriod::new(3);
+        assert!(closes(p.on_trade(&tside(100, 1, Buy)))); // run 1, ouvre
+        assert!(!closes(p.on_trade(&tside(100, 1, Buy)))); // run 2
+        assert!(!closes(p.on_trade(&tside(100, 1, Buy)))); // run 3 (atteint)
+        assert!(closes(p.on_trade(&tside(100, 1, Sell)))); // ferme/ouvre
+    }
+
+    // AGG-P9 : Point & Figure (renversement de colonne).
+    #[test]
+    fn point_figure_reverses_column() {
+        let mut p = PointFigurePeriod::new(10, 3); // box 10, reversal 3 → seuil 30
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ouvre colonne
+        assert!(!closes(p.on_trade(&trv(1, 115, 1)))); // établit dir = +1
+        assert!(!closes(p.on_trade(&trv(2, 130, 1)))); // prolonge la colonne X
+        assert!(closes(p.on_trade(&trv(3, 95, 1)))); // 130-95=35 ≥ 30 → renversement
     }
 }

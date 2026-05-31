@@ -4,7 +4,7 @@
 //! ferme les barres et notifie les abonnés. Déterministe (event-time). T0 : côté agressif.
 
 use crate::bar::Bar;
-use crate::canonical::{BookUpdate, Granularity, Instrument, MarketEvent, Trade};
+use crate::canonical::{BookUpdate, Granularity, Instrument, MarketEvent, Trade, Ts};
 use crate::error::ConfigError;
 use crate::extension::Subscriber;
 use crate::orderflow::{Cvd, LensInstance, LensKind, OrderFlow};
@@ -133,6 +133,8 @@ impl Builder {
                 Some(w) => PassiveAggregator::with_window(w),
                 None => PassiveAggregator::new(),
             }),
+            last_ts: None,
+            out_of_order: 0,
         })
     }
 }
@@ -145,6 +147,9 @@ pub struct SymbolAggregator {
     subscribers: Vec<Box<dyn Subscriber>>,
     /// Côté passif (carnet), présent si activé via `with_passive` (fiche `PAS-1`).
     passive: Option<PassiveAggregator>,
+    /// Détection de désordre temporel (fiche `TR-5`).
+    last_ts: Option<Ts>,
+    out_of_order: u64,
 }
 
 impl SymbolAggregator {
@@ -174,8 +179,19 @@ impl SymbolAggregator {
         self.subscribers.push(sub);
     }
 
+    /// Nombre d'événements arrivés en **désordre temporel** (fiche `TR-5`).
+    pub fn out_of_order_count(&self) -> u64 {
+        self.out_of_order
+    }
+
     /// Point d'entrée unique — live **et** replay (fiche `SYM-1`).
     pub fn process(&mut self, event: &MarketEvent) {
+        // Détection de désordre temporel (fiche `TR-5`) — on ne rejette pas l'event.
+        let ts = event.ts();
+        match self.last_ts {
+            Some(prev) if ts < prev => self.out_of_order += 1,
+            _ => self.last_ts = Some(ts),
+        }
         match event {
             // Routage : un trade alimente le côté agressif (fiche `SYM-2`).
             MarketEvent::Trade(t) => self.on_trade(t),

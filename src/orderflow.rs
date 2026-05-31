@@ -4,9 +4,9 @@
 //! (`BarComponent`), câblé dans `SymbolAggregator` via `LensKind` (composabilité) et
 //! exposé à la clôture dans `OrderFlow` attaché à la `Bar`.
 
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
-use crate::canonical::{AggressorSide, Px, Qty, Trade};
+use crate::canonical::{AggressorSide, Px, Qty, Trade, Ts};
 
 /// Contrat commun d'une lentille order flow (fiche `OF-0`).
 pub trait BarComponent {
@@ -172,6 +172,110 @@ impl Cvd {
     }
 }
 
+/// **TPO / Market Profile** (fiches `TPO-1…5`) : distribution du **temps** par niveau de
+/// prix sur la barre, via des *brackets* (sous-périodes de durée `bracket_ns`).
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Tpo {
+    bracket_ns: i64,
+    ib_brackets: u32,
+    bar_start: Option<Ts>,
+    /// `prix → ensemble des brackets l'ayant touché`.
+    by_price: BTreeMap<Px, BTreeSet<u32>>,
+}
+
+impl Tpo {
+    /// `bracket_ns` = durée d'un bracket ; `ib_brackets` = nb de brackets de l'Initial Balance.
+    pub fn new(bracket_ns: i64, ib_brackets: u32) -> Self {
+        assert!(bracket_ns > 0, "bracket_ns doit être > 0");
+        Tpo {
+            bracket_ns,
+            ib_brackets,
+            bar_start: None,
+            by_price: BTreeMap::new(),
+        }
+    }
+
+    fn count(&self, price: Px) -> usize {
+        self.by_price.get(&price).map(|s| s.len()).unwrap_or(0)
+    }
+
+    fn total(&self) -> usize {
+        self.by_price.values().map(|s| s.len()).sum()
+    }
+
+    /// `POC` temps : prix le plus visité (le plus bas en cas d'égalité) — `TPO-3`.
+    pub fn poc(&self) -> Option<Px> {
+        self.by_price
+            .iter()
+            .max_by(|a, b| a.1.len().cmp(&b.1.len()).then(b.0.cmp(a.0)))
+            .map(|(&p, _)| p)
+    }
+
+    /// `Value Area` temps (~`pct` des TPO autour du POC) — `TPO-3`.
+    pub fn value_area(&self, pct: f64) -> Option<(Px, Px)> {
+        let poc = self.poc()?;
+        let total = self.total();
+        if total == 0 {
+            return None;
+        }
+        let target = (total as f64 * pct).ceil() as usize;
+        let prices: Vec<Px> = self.by_price.keys().copied().collect();
+        let i0 = prices.iter().position(|&p| p == poc).unwrap();
+        let (mut lo, mut hi, mut acc) = (i0, i0, self.count(poc));
+        while acc < target && (lo > 0 || hi < prices.len() - 1) {
+            let below = if lo > 0 {
+                self.count(prices[lo - 1])
+            } else {
+                0
+            };
+            let above = if hi < prices.len() - 1 {
+                self.count(prices[hi + 1])
+            } else {
+                0
+            };
+            if hi < prices.len() - 1 && (above >= below || lo == 0) {
+                hi += 1;
+                acc += above;
+            } else {
+                lo -= 1;
+                acc += below;
+            }
+        }
+        Some((prices[lo], prices[hi]))
+    }
+
+    /// `Single prints` : prix touchés par **un seul** bracket — `TPO-4`.
+    pub fn single_prints(&self) -> Vec<Px> {
+        self.by_price
+            .iter()
+            .filter(|(_, s)| s.len() == 1)
+            .map(|(&p, _)| p)
+            .collect()
+    }
+
+    /// `Initial Balance` : fourchette de prix des `ib_brackets` premiers brackets — `TPO-5`.
+    pub fn initial_balance(&self) -> Option<(Px, Px)> {
+        let ib: Vec<Px> = self
+            .by_price
+            .iter()
+            .filter(|(_, s)| s.iter().any(|&b| b < self.ib_brackets))
+            .map(|(&p, _)| p)
+            .collect();
+        match (ib.iter().min(), ib.iter().max()) {
+            (Some(&lo), Some(&hi)) => Some((lo, hi)),
+            _ => None,
+        }
+    }
+}
+
+impl BarComponent for Tpo {
+    fn on_trade(&mut self, t: &Trade) {
+        let start = *self.bar_start.get_or_insert(t.ts);
+        let idx = ((t.ts - start) / self.bracket_ns) as u32;
+        self.by_price.entry(t.price).or_default().insert(idx);
+    }
+}
+
 /// Résultats order flow attachés à une `Bar` fermée (snapshot des lentilles actives).
 #[derive(Debug, Clone, Default, PartialEq)]
 pub struct OrderFlow {
@@ -181,6 +285,8 @@ pub struct OrderFlow {
     pub delta: Option<i64>,
     /// Cumulative delta à la clôture de cette barre (`DC-2`, état inter-barres).
     pub cvd: Option<i64>,
+    /// Profil TPO / Market Profile (`TPO-*`).
+    pub tpo: Option<Tpo>,
 }
 
 /// Choix de lentilles à activer sur une période (fiche `OF-COMP`).
@@ -192,6 +298,11 @@ pub enum LensKind {
     },
     /// Delta de barre (+ CVD cumulé automatiquement au niveau de la période).
     Delta,
+    /// TPO / Market Profile (`bracket_ns` = durée d'un bracket ; `ib_brackets` = IB).
+    Tpo {
+        bracket_ns: i64,
+        ib_brackets: u32,
+    },
 }
 
 /// Instance vivante d'une lentille pour la barre en cours.
@@ -199,6 +310,7 @@ pub(crate) enum LensInstance {
     Footprint(Footprint),
     VolumeProfile(VolumeProfile),
     Delta(Delta),
+    Tpo(Tpo),
 }
 
 impl LensInstance {
@@ -209,6 +321,10 @@ impl LensInstance {
                 LensInstance::VolumeProfile(VolumeProfile::new(value_area_pct))
             }
             LensKind::Delta => LensInstance::Delta(Delta::new()),
+            LensKind::Tpo {
+                bracket_ns,
+                ib_brackets,
+            } => LensInstance::Tpo(Tpo::new(bracket_ns, ib_brackets)),
         }
     }
 
@@ -217,6 +333,7 @@ impl LensInstance {
             LensInstance::Footprint(c) => c.on_trade(t),
             LensInstance::VolumeProfile(c) => c.on_trade(t),
             LensInstance::Delta(c) => c.on_trade(t),
+            LensInstance::Tpo(c) => c.on_trade(t),
         }
     }
 
@@ -237,6 +354,11 @@ impl LensInstance {
                 c.on_close();
                 of.delta = Some(c.value());
                 Some(c.value())
+            }
+            LensInstance::Tpo(c) => {
+                c.on_close();
+                of.tpo = Some(c.clone());
+                None
             }
         }
     }
@@ -338,5 +460,27 @@ mod tests {
         assert_eq!(cvd.push_bar_delta(-2), -2);
         assert_eq!(cvd.push_bar_delta(5), 3);
         assert_eq!(cvd.value(), 3);
+    }
+
+    // UC-T3-5..8 : TPO / Market Profile.
+    #[test]
+    fn tpo_profile() {
+        // bracket 0 : t0,t5 @100 ; bracket 1 : t12 @101, t15 @100 ; bracket 2 : t25 @102
+        let trades = [(0i64, 100i64), (5, 100), (12, 101), (15, 100), (25, 102)];
+        let mut tpo = Tpo::new(10, 2);
+        for (ts, price) in trades {
+            tpo.on_trade(&Trade {
+                ts,
+                price,
+                size: 1,
+                aggressor: AggressorSide::Buy,
+                instrument_id: 1,
+            });
+        }
+        tpo.on_close();
+        assert_eq!(tpo.poc(), Some(100)); // 100 touché par brackets {0,1}
+        assert_eq!(tpo.single_prints(), vec![101, 102]); // touchés par 1 bracket
+        assert_eq!(tpo.value_area(0.70), Some((100, 101)));
+        assert_eq!(tpo.initial_balance(), Some((100, 101))); // brackets 0 et 1
     }
 }

@@ -149,6 +149,19 @@ fn uc_t0_7_finish_flushes_partial_bar() {
     assert_eq!(bars[1].1.ohlcv.volume, 4);
 }
 
+// --- UC-T3-10 : détection de désordre temporel (TR-5) -------------------------
+#[test]
+fn out_of_order_events_are_counted_not_rejected() {
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_time_period(100)
+        .build()
+        .unwrap();
+    agg.process(&trade(0, 100, 1, AggressorSide::Buy));
+    agg.process(&trade(50, 101, 1, AggressorSide::Buy));
+    agg.process(&trade(30, 102, 1, AggressorSide::Buy)); // ts recule
+    assert_eq!(agg.out_of_order_count(), 1);
+}
+
 // --- UC-T0-9 : déterminisme du rejeu ------------------------------------------
 #[test]
 fn uc_t0_9_replay_is_deterministic() {

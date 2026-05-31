@@ -29,9 +29,10 @@ pub use canonical::{AggressorSide, Granularity, Instrument, MarketEvent, Px, Qty
 pub use canonical::{BookAction, BookSide, BookUpdate};
 pub use error::ConfigError;
 pub use extension::{ChannelSink, FnSubscriber, Subscriber};
-pub use orderflow::{BarComponent, Cvd, Delta, Footprint, VolumeProfile};
+pub use orderflow::{BarComponent, Cvd, Delta, Footprint, LensKind, OrderFlow, Tpo, VolumeProfile};
 pub use passive::{BookError, LiquidityProfile, OrderBook, PassiveAggregator};
 pub use period::{
-    AlignedTimePeriod, Boundary, DollarPeriod, Period, RangePeriod, RenkoPeriod, TickPeriod,
-    TimePeriod, VolumePeriod,
+    AlignedTimePeriod, Boundary, DollarImbalancePeriod, DollarPeriod, Period, PointFigurePeriod,
+    RangePeriod, RenkoPeriod, RunPeriod, TickImbalancePeriod, TickPeriod, TimePeriod,
+    VolumeImbalancePeriod, VolumePeriod,
 };
