@@ -515,6 +515,83 @@ impl Period for RunPeriod {
     }
 }
 
+/// Barres **Point & Figure** (fiche `AGG-P9`, simplifiées) : chaque barre = une colonne
+/// directionnelle (X montante / O descendante). La barre se ferme au **renversement** du
+/// prix d'au moins `reversal × box_size` contre la tendance de la colonne.
+///
+/// *Note* : version simplifiée (pas de grille de box stricte ni de filtrage à la box) —
+/// raffinement ultérieur si besoin.
+pub struct PointFigurePeriod {
+    box_size: i64,
+    reversal: i64,
+    dir: i64,
+    extreme: Px,
+    open: bool,
+}
+impl PointFigurePeriod {
+    pub fn new(box_size: i64, reversal: i64) -> Self {
+        assert!(box_size > 0 && reversal > 0);
+        PointFigurePeriod {
+            box_size,
+            reversal,
+            dir: 0,
+            extreme: 0,
+            open: false,
+        }
+    }
+    fn open_at(&mut self, t: &Trade, dir: i64) -> Boundary {
+        self.open = true;
+        self.dir = dir;
+        self.extreme = t.price;
+        Boundary::CloseAndOpen {
+            start: t.ts,
+            end: t.ts,
+            partial: false,
+        }
+    }
+}
+impl Period for PointFigurePeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open {
+            return self.open_at(t, 0);
+        }
+        let rev = self.reversal * self.box_size;
+        match self.dir {
+            // Direction non encore établie : on l'établit au 1er mouvement ≥ box.
+            0 => {
+                if (t.price - self.extreme).abs() >= self.box_size {
+                    self.dir = (t.price - self.extreme).signum();
+                    self.extreme = t.price;
+                }
+                Boundary::Continue
+            }
+            d if d > 0 => {
+                if t.price > self.extreme {
+                    self.extreme = t.price;
+                    Boundary::Continue
+                } else if self.extreme - t.price >= rev {
+                    self.open_at(t, -1) // renversement → nouvelle colonne (O)
+                } else {
+                    Boundary::Continue
+                }
+            }
+            _ => {
+                if t.price < self.extreme {
+                    self.extreme = t.price;
+                    Boundary::Continue
+                } else if t.price - self.extreme >= rev {
+                    self.open_at(t, 1) // renversement → nouvelle colonne (X)
+                } else {
+                    Boundary::Continue
+                }
+            }
+        }
+    }
+    fn label(&self) -> String {
+        format!("pnf:{}:{}", self.box_size, self.reversal)
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -681,5 +758,15 @@ mod tests {
         assert!(!closes(p.on_trade(&tside(100, 1, Buy)))); // run 2
         assert!(!closes(p.on_trade(&tside(100, 1, Buy)))); // run 3 (atteint)
         assert!(closes(p.on_trade(&tside(100, 1, Sell)))); // ferme/ouvre
+    }
+
+    // AGG-P9 : Point & Figure (renversement de colonne).
+    #[test]
+    fn point_figure_reverses_column() {
+        let mut p = PointFigurePeriod::new(10, 3); // box 10, reversal 3 → seuil 30
+        assert!(closes(p.on_trade(&trv(0, 100, 1)))); // ouvre colonne
+        assert!(!closes(p.on_trade(&trv(1, 115, 1)))); // établit dir = +1
+        assert!(!closes(p.on_trade(&trv(2, 130, 1)))); // prolonge la colonne X
+        assert!(closes(p.on_trade(&trv(3, 95, 1)))); // 130-95=35 ≥ 30 → renversement
     }
 }
