@@ -5,7 +5,7 @@
 
 use std::collections::BTreeMap;
 
-use crate::canonical::{BookAction, BookSide, BookUpdate, Px, Qty};
+use crate::canonical::{BookAction, BookSide, BookUpdate, Px, Qty, Ts};
 
 /// Anomalie d'intégrité du carnet (fiche `OB-10` / `TR-7`).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -18,7 +18,7 @@ pub enum BookError {
 ///
 /// Le L3 (market-by-order) se dérive vers ce L2 en amont (mapping), via le suivi des
 /// `order_id`. Ici on tient `prix → quantité` par côté.
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, PartialEq, Eq)]
 pub struct OrderBook {
     bids: BTreeMap<Px, Qty>,
     asks: BTreeMap<Px, Qty>,
@@ -115,23 +115,179 @@ impl OrderBook {
             _ => false,
         }
     }
+
+    /// Quantité totale d'un côté (somme des niveaux).
+    pub fn total_qty(&self, side: BookSide) -> Qty {
+        match side {
+            BookSide::Bid => self.bids.values().copied().sum(),
+            BookSide::Ask => self.asks.values().copied().sum(),
+        }
+    }
 }
 
-/// Agrégateur passif : maintient l'`OrderBook` (fiche `PAS-1`). Les profils périodiques
-/// (lot B) viendront s'appuyer dessus.
-#[derive(Debug, Default)]
+/// Profil de liquidité périodique (fiches `LP-1…6`) : résumé de l'état du carnet sur une
+/// fenêtre alignée sur l'horloge (mêmes bornes que le côté agressif `AlignedTimePeriod`).
+#[derive(Debug, Clone, PartialEq)]
+pub struct LiquidityProfile {
+    pub start: Ts,
+    pub end: Ts,
+    /// Snapshots du carnet à l'ouverture et à la clôture de la fenêtre (`LP-2`).
+    pub open: OrderBook,
+    pub close: OrderBook,
+    /// Churn : volumes ajoutés / annulés sur la fenêtre (`LP-3`).
+    pub add_volume: Qty,
+    pub cancel_volume: Qty,
+    /// Quantité **moyenne pondérée par le temps** par côté (`LP-1` côté agrégé / `LP-4`).
+    pub tw_bid: f64,
+    pub tw_ask: f64,
+    /// Fenêtre fermée par un flush de fin de flux (incomplète).
+    pub partial: bool,
+}
+
+impl LiquidityProfile {
+    /// Déséquilibre bid/ask pondéré-temps ∈ [−1, 1] (`LP-5`). `>0` = plus de bid.
+    pub fn imbalance(&self) -> f64 {
+        let tot = self.tw_bid + self.tw_ask;
+        if tot == 0.0 {
+            0.0
+        } else {
+            (self.tw_bid - self.tw_ask) / tot
+        }
+    }
+}
+
+/// État d'accumulation d'une fenêtre passive en cours.
+struct Window {
+    start: Ts,
+    end: Ts,
+    open: OrderBook,
+    add_volume: Qty,
+    cancel_volume: Qty,
+    last_ts: Ts,
+    acc_bid: f64,
+    acc_ask: f64,
+}
+
+/// Agrégateur passif : maintient l'`OrderBook` (fiche `PAS-1`) et, si une fenêtre est
+/// configurée, produit des `LiquidityProfile` périodiques alignés (fiches `LP-*`).
 pub struct PassiveAggregator {
     book: OrderBook,
+    window_ns: Option<i64>,
+    window: Option<Window>,
+    closed: Vec<LiquidityProfile>,
+}
+
+impl Default for PassiveAggregator {
+    fn default() -> Self {
+        PassiveAggregator {
+            book: OrderBook::new(),
+            window_ns: None,
+            window: None,
+            closed: Vec::new(),
+        }
+    }
 }
 
 impl PassiveAggregator {
+    /// Carnet seul, sans profils périodiques.
     pub fn new() -> Self {
         Self::default()
     }
 
-    /// Applique un `BookUpdate` au carnet maintenu.
+    /// Avec profils périodiques de `window_ns` (fenêtres alignées sur l'horloge).
+    pub fn with_window(window_ns: i64) -> Self {
+        assert!(window_ns > 0, "window_ns doit être > 0");
+        PassiveAggregator {
+            window_ns: Some(window_ns),
+            ..Self::default()
+        }
+    }
+
+    fn aligned_window(&self, ts: Ts, w: i64) -> (Ts, Ts) {
+        let start = ts.div_euclid(w) * w;
+        (start, start + w)
+    }
+
+    /// Intègre les totaux courants du book sur `[last_ts, up_to]`.
+    fn integrate(win: &mut Window, book: &OrderBook, up_to: Ts) {
+        let dt = (up_to - win.last_ts) as f64;
+        if dt > 0.0 {
+            win.acc_bid += book.total_qty(BookSide::Bid) as f64 * dt;
+            win.acc_ask += book.total_qty(BookSide::Ask) as f64 * dt;
+            win.last_ts = up_to;
+        }
+    }
+
+    fn finalize(&mut self, end: Ts, partial: bool) {
+        if let Some(win) = self.window.take() {
+            let duration = (end - win.start).max(1) as f64;
+            self.closed.push(LiquidityProfile {
+                start: win.start,
+                end,
+                open: win.open,
+                close: self.book.clone(),
+                add_volume: win.add_volume,
+                cancel_volume: win.cancel_volume,
+                tw_bid: win.acc_bid / duration,
+                tw_ask: win.acc_ask / duration,
+                partial,
+            });
+        }
+    }
+
+    /// Applique un `BookUpdate` au carnet et alimente le profil de la fenêtre courante.
     pub fn apply(&mut self, u: &BookUpdate) -> Result<(), BookError> {
+        if let Some(w) = self.window_ns {
+            // Fermer les fenêtres traversées, ouvrir celle de `u.ts`.
+            let crosses = self
+                .window
+                .as_ref()
+                .map(|win| u.ts >= win.end)
+                .unwrap_or(true);
+            if crosses {
+                if let Some(win) = self.window.as_mut() {
+                    let end = win.end;
+                    PassiveAggregator::integrate(win, &self.book, end);
+                    self.finalize(end, false);
+                }
+                let (start, end) = self.aligned_window(u.ts, w);
+                self.window = Some(Window {
+                    start,
+                    end,
+                    open: self.book.clone(),
+                    add_volume: 0,
+                    cancel_volume: 0,
+                    last_ts: start,
+                    acc_bid: 0.0,
+                    acc_ask: 0.0,
+                });
+            }
+            // Intègre jusqu'à l'instant de l'update, puis comptabilise le churn.
+            if let Some(win) = self.window.as_mut() {
+                PassiveAggregator::integrate(win, &self.book, u.ts);
+                match u.action {
+                    BookAction::Add => win.add_volume += u.size,
+                    BookAction::Cancel => win.cancel_volume += u.size,
+                    BookAction::Modify => {}
+                }
+            }
+        }
         self.book.apply(u)
+    }
+
+    /// Ferme la fenêtre en cours (flush de fin de flux) — fiche `SYM-11`/`LP-6`.
+    pub fn finish(&mut self) {
+        if let Some(win) = self.window.as_mut() {
+            let last = win.last_ts.max(win.start);
+            PassiveAggregator::integrate(win, &self.book, last);
+            let end = win.end;
+            self.finalize(end, true);
+        }
+    }
+
+    /// Récupère et vide les profils fermés (consommation pull, fiche `EXT-6`).
+    pub fn drain_profiles(&mut self) -> Vec<LiquidityProfile> {
+        std::mem::take(&mut self.closed)
     }
 
     /// Accès en lecture au carnet courant (fiche `EXT-6` — état interrogeable).
