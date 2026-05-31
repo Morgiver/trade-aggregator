@@ -17,3 +17,10 @@ travers les `Bar` (`CVD`).
 ## Frontière
 On fournit `delta` et `cvd` (chiffres). Les *divergences CVD/prix*, signaux, etc. =
 interprétation → consommateur.
+
+---
+
+## Fiches features (Phase 5)
+- **`DC-1`** — `Delta` par `Bar` (Σ buy − Σ sell) · **P1** · *delta correct, dérivable du footprint.*
+- **`DC-2`** — `CVD` (cumul inter-Bar, état agrégateur) · **P1** · *cumul correct, persistant d'une bar à l'autre.*
+- **`DC-3`** — Min/Max delta intra-bar · **P2** · *extrêmes de delta dans la bar exposés.*

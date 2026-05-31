@@ -35,3 +35,13 @@
 On **résume** la liquidité ; on ne dit pas ce qu'elle *signifie*. L'absorption, la
 détection d'icebergs (qui croisent agressif × passif) = **interprétation, hors scope** —
 le consommateur les calcule via le point d'extension.
+
+---
+
+## Fiches features (Phase 5)
+- **`LP-1`** — Profil de liquidité pondéré-temps · **P2** · *quantité moyenne par niveau, pondérée par durée.*
+- **`LP-2`** — Snapshots ouverture/clôture · **P2** · *book figé aux bornes de la période.*
+- **`LP-3`** — Churn (volumes add/cancel) · **P2** · *activité du book sur la période.*
+- **`LP-4`** — Stats de depth (max/min, cumul par côté) · **P2** · *profondeur résumée.*
+- **`LP-5`** — Déséquilibre bid/ask moyen · **P2** · *ratio moyen exposé.*
+- **`LP-6`** — Émission `BarUpdate`/`BarClose` (alignée aggressor) · **P2** · *mêmes bornes que l'order flow.*

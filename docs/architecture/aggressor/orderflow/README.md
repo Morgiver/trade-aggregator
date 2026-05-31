@@ -30,3 +30,12 @@ trait BarComponent {
 
 > `Footprint` et `VolumeProfile` partagent la donnée « volume par prix » ; `TPO` la
 > remplace par « temps par prix ». À l'implémentation, on évitera de recompter trois fois.
+
+---
+
+## Fiches features (Phase 5)
+
+> Niveau « trait » commun ; les fiches par lentille sont dans chaque feuille.
+
+- **`OF-0`** — Trait `BarComponent` (`on_trade`, `on_close`) · **P1** · *contrat commun d'une lentille.*
+- **`OF-COMP`** — Composabilité (sélection des lentilles par `Period`) · **P1** · *on active footprint seul, ou +TPO, etc.*

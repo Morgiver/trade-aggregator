@@ -29,3 +29,17 @@ channel / `Stream`. « Prévoir push **et** pull » sans dupliquer le cœur.
 ## Frontière
 Ici s'arrête la crate : au-delà du point d'extension, c'est le **consommateur** (layer
 d'indicateurs, viz, stratégie) — un autre projet.
+
+---
+
+## Fiches features (Phase 5)
+
+> Atomisation du thème F ([`../vision/features.md`](../vision/features.md)).
+
+- **`EXT-1`** — Trait `Subscriber::on_bar_close` · **P0** · *un abonné reçoit chaque bar fermée.*
+- **`EXT-2`** — `Subscriber::on_bar_update` (intra-bar) · **P1** · *un abonné reçoit les mises à jour de la bar en formation.*
+- **`EXT-3`** — Dispatch générique zero-cost (hot path) · **P1** · *abonnement sans `dyn` ni alloc dans le hot path.*
+- **`EXT-4`** — Adaptateur channel (push, multi-consommateurs) · **P1** · *fan-out vers plusieurs consommateurs découplés.*
+- **`EXT-5`** — Adaptateur `Iterator`/`Stream` (pull) · **P1** · *consommation pull, composable.*
+- **`EXT-6`** — État interrogeable (snapshot à la demande) · **P2** · *lecture de l'état courant sans abonnement.*
+- **`EXT-7`** — Garantie d'alignement des deux côtés · **P1** · *aggressor et passive exposés sur mêmes bornes.*

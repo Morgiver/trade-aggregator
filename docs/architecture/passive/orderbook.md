@@ -42,3 +42,16 @@
 
 La reconstruction **produit un état** ; elle n'en tire **aucune** conclusion (interprétation
 = hors scope). Ce que les profils en font → [`liquidity-profile.md`](liquidity-profile.md).
+
+---
+
+## Fiches features (Phase 5)
+- **`OB-1`** — Traitement `Add` · **P1** · *un ajout insère/incrémente le niveau.*
+- **`OB-2`** — Traitement `Cancel` · **P1** · *une annulation retire/décrémente.*
+- **`OB-3`** — Traitement `Modify` · **P1** · *une modif change quantité/prix.*
+- **`OB-4`** — Traitement `Fill`/`Trade` · **P1** · *un fill réduit la quantité passive.*
+- **`OB-5`** — `Snapshot`/`Clear` (amorçage & resync) · **P1** · *le book repart d'un état connu.*
+- **`OB-6`** — Détection de trous de séquence · **P2** · *un gap déclenche une resynchronisation.*
+- **`OB-7`** — Niveaux agrégés L2 (`prix → quantité`) · **P1** · *book L2 correct.*
+- **`OB-8`** — Ordres individuels L3 (+ dérivation L2) · **P1** · *book L3 maintenu, L2 dérivable.*
+- **`OB-9`** — Requêtes (best bid/ask, depth N, snapshot) · **P1** · *état interrogeable à la demande.*

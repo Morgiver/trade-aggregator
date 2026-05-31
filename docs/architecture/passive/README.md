@@ -38,3 +38,14 @@ les deux profils (order flow / liquidité) sont **comparables sur la même fenê
 - **L3 (MBO)** : par **ordre individuel** (file d'attente) → permet de dériver le L2 ; le
   détail par ordre reste disponible (mais toute *interprétation* — ex. position dans la
   file — est hors scope).
+
+---
+
+## Fiches features (Phase 5)
+
+> Niveau orchestration du nœud passif ; les fiches détaillées sont dans
+> [`orderbook.md`](orderbook.md) et [`liquidity-profile.md`](liquidity-profile.md).
+
+- **`PAS-1`** — Routage `BookUpdate` → maintien + profils · **P1** · *un book update met à jour le book puis les profils.*
+- **`PAS-2`** — Alignement des `Period` sur le côté agressif · **P1** · *profils passifs sur les mêmes bornes que l'order flow.*
+- **`PAS-3`** — Refus fail-fast si `Granularity` = L1 · **P1** · *PassiveAggregator impossible sans profondeur.*

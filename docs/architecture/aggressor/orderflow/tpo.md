@@ -19,3 +19,12 @@
 
 ## Granularité
 Comme les autres lentilles agressives : `Trade` suffisent. Indépendant du book.
+
+---
+
+## Fiches features (Phase 5)
+- **`TPO-1`** — Découpage en brackets (sous-périodes) · **P2** · *le temps de la bar est segmenté.*
+- **`TPO-2`** — Marquage des niveaux touchés par bracket · **P2** · *profil temps×prix construit.*
+- **`TPO-3`** — `POC` / `ValueArea` (version temps) · **P2** · *POC/VA temps corrects.*
+- **`TPO-4`** — `Single prints` · **P2** · *niveaux touchés par un seul bracket identifiés.*
+- **`TPO-5`** — `Initial Balance` · **P2** · *IB (n premiers brackets) exposée.*

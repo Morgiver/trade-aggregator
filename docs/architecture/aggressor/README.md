@@ -74,3 +74,33 @@ Les lentilles order flow sont riches → re-décomposées dans **[`orderflow/`](
 
 `Period` et `Bar` restent décrits ici (feuilles de ce nœud). Le détail des types vient en
 **Phase 7**.
+
+---
+
+## Fiches features (Phase 5)
+
+> Atomisation du thème C ([`../../vision/features.md`](../../vision/features.md)). Les
+> lentilles order flow (thème D) sont fichées dans [`orderflow/`](orderflow/README.md).
+
+### `Period` — types (la plus petite unité = un type de Period)
+- **`AGG-P0`** — Trait `Period` (`on_trade → Boundary` : Continue | CloseAndOpen) · **P0** · *contrat commun de fermeture.*
+- **`AGG-P1`** — `TimePeriod` (n unités de temps) · **P0** · *bar close au franchissement de durée.*
+- **`AGG-P2`** — `AlignedTimePeriod` (bornée sur l'horloge) · **P1** · *bornes alignées sur minute/heure.*
+- **`AGG-P3`** — `SessionPeriod` (RTH / sessions) · **P2** · *bornes = ouverture/clôture de session.*
+- **`AGG-P4`** — `TickPeriod` (n trades) · **P1** · *close tous les n ticks.*
+- **`AGG-P5`** — `VolumePeriod` (n volume) · **P1** · *close à n volume cumulé.*
+- **`AGG-P6`** — `DollarPeriod` (n notional) · **P1** · *close à n valeur échangée.*
+- **`AGG-P7`** — `RangePeriod` (range de prix fixe) · **P1** · *close au franchissement de range.*
+- **`AGG-P8`** — `RenkoPeriod` · **P1** · *brique au mouvement de prix.*
+- **`AGG-P9`** — `PointFigurePeriod` · **P2** · *colonnes X/O.*
+- **`AGG-P10`** — `TickImbalancePeriod` · **P2** · *close au seuil de déséquilibre de ticks.*
+- **`AGG-P11`** — `VolumeImbalancePeriod` · **P2** · *idem, volume.*
+- **`AGG-P12`** — `DollarImbalancePeriod` · **P2** · *idem, notional.*
+- **`AGG-P13`** — `RunPeriod` (tick/volume/dollar runs) · **P2** · *close sur séquence directionnelle.*
+- **`AGG-P14`** — `HybridPeriod` (composite, premier atteint) · **P2** · *close au 1ᵉʳ critère franchi.*
+
+### `Bar` — l'accumulateur
+- **`AGG-B1`** — État `Bar` (forming → closed) · **P0** · *cycle de vie d'une bar.*
+- **`AGG-B2`** — Calcul `OHLCV` · **P0** · *open/high/low/close/volume corrects.*
+- **`AGG-B3`** — Émission `BarUpdate` (intra-bar) · **P1** · *un event en cours notifie la bar en formation.*
+- **`AGG-B4`** — Émission `BarClose` · **P0** · *la fermeture notifie la bar finalisée.*

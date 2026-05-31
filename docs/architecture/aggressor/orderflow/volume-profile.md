@@ -20,3 +20,10 @@ double comptage.
 ## Frontière
 POC / ValueArea sont des **statistiques de la distribution** → agrégation (IN). Toute
 lecture *décisionnelle* (ex. « le POC fait support ») = interprétation (OUT).
+
+---
+
+## Fiches features (Phase 5)
+- **`VP-1`** — Accumulation `prix → volume` sur `on_trade` · **P1** · *distribution de volume par prix.*
+- **`VP-2`** — `POC` (niveau de volume max) · **P1** · *POC correct à la clôture.*
+- **`VP-3`** — `ValueArea` (~70 %, seuil paramétrable) · **P1** · *VAH/VAL corrects autour du POC.*
