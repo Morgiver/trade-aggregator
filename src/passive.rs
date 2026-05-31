@@ -116,6 +116,17 @@ impl OrderBook {
         }
     }
 
+    /// Fixe directement la quantité d'un niveau (0 = retire). Utile pour reconstruire
+    /// depuis un snapshot par niveaux (MBP).
+    pub fn set_level(&mut self, side: BookSide, price: Px, qty: Qty) {
+        let levels = self.side_mut(side);
+        if qty == 0 {
+            levels.remove(&price);
+        } else {
+            levels.insert(price, qty);
+        }
+    }
+
     /// Quantité totale d'un côté (somme des niveaux).
     pub fn total_qty(&self, side: BookSide) -> Qty {
         match side {
