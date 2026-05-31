@@ -13,4 +13,6 @@ On consigne les **changements notables** (fin de phase, tranche réalisée, déc
 - **Phase 2 — Vision** : `docs/vision/` complet (produit, positionnement, 5 piliers,
   scope IN/OUT, features priorisées P0→P3, tranches macro T0→T4, risques & questions).
   Issue #2 close.
-- Démarrage de la **Phase 3 — Domaine** (issue #3).
+- **Phase 3 — Domaine** : `docs/domain/` (glossaire EN/FR + concepts & relations
+  Mermaid). Vocabulaire stable. Issue #3 close.
+- Démarrage de la **Phase 4 — Architecture** (issue #4).
