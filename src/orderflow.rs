@@ -172,6 +172,77 @@ impl Cvd {
     }
 }
 
+/// **Nombre de trades** par côté agresseur (issue #19) : `(buy_count, sell_count)`.
+///
+/// `Unknown` est ignoré (comme `Delta`). Couplé au volume, `volume / nombre_de_trades`
+/// donne la **taille moyenne de trade** (signal de microstructure : sweeps, icebergs) —
+/// calcul laissé au consommateur (on n'expose que les comptes bruts).
+#[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
+pub struct TradeCount {
+    buy: u64,
+    sell: u64,
+}
+
+impl TradeCount {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    pub fn buy(&self) -> u64 {
+        self.buy
+    }
+    pub fn sell(&self) -> u64 {
+        self.sell
+    }
+    pub fn total(&self) -> u64 {
+        self.buy + self.sell
+    }
+    /// `(buy_count, sell_count)`.
+    pub fn pair(&self) -> (u64, u64) {
+        (self.buy, self.sell)
+    }
+}
+
+impl BarComponent for TradeCount {
+    fn on_trade(&mut self, t: &Trade) {
+        match t.aggressor {
+            AggressorSide::Buy => self.buy += 1,
+            AggressorSide::Sell => self.sell += 1,
+            AggressorSide::Unknown => {}
+        }
+    }
+}
+
+/// **VWAP** de barre (issue #19) : `Σ(price·size) / Σ size`, **tous trades** (ancre de
+/// prix côté-agnostique, agrégation pure). `None` si volume nul.
+#[derive(Debug, Default, Clone, Copy, PartialEq)]
+pub struct Vwap {
+    /// `Σ price·size` (i128 : borne large contre l'overflow).
+    num: i128,
+    /// `Σ size`.
+    den: u128,
+}
+
+impl Vwap {
+    pub fn new() -> Self {
+        Self::default()
+    }
+    /// VWAP courant ; `None` si aucun volume agrégé.
+    pub fn value(&self) -> Option<f64> {
+        if self.den == 0 {
+            None
+        } else {
+            Some(self.num as f64 / self.den as f64)
+        }
+    }
+}
+
+impl BarComponent for Vwap {
+    fn on_trade(&mut self, t: &Trade) {
+        self.num += t.price as i128 * t.size as i128;
+        self.den += t.size as u128;
+    }
+}
+
 /// **TPO / Market Profile** (fiches `TPO-1…5`) : distribution du **temps** par niveau de
 /// prix sur la barre, via des *brackets* (sous-périodes de durée `bracket_ns`).
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -287,6 +358,10 @@ pub struct OrderFlow {
     pub cvd: Option<i64>,
     /// Profil TPO / Market Profile (`TPO-*`).
     pub tpo: Option<Tpo>,
+    /// Nombre de trades `(buy, sell)` (issue #19, `Unknown` ignoré).
+    pub trade_count: Option<(u64, u64)>,
+    /// VWAP de la barre (issue #19).
+    pub vwap: Option<f64>,
 }
 
 /// Choix de lentilles à activer sur une période (fiche `OF-COMP`).
@@ -303,6 +378,10 @@ pub enum LensKind {
         bracket_ns: i64,
         ib_brackets: u32,
     },
+    /// Nombre de trades `(buy, sell)` (issue #19).
+    TradeCount,
+    /// VWAP de barre (issue #19).
+    Vwap,
 }
 
 /// Instance vivante d'une lentille pour la barre en cours.
@@ -311,6 +390,8 @@ pub(crate) enum LensInstance {
     VolumeProfile(VolumeProfile),
     Delta(Delta),
     Tpo(Tpo),
+    TradeCount(TradeCount),
+    Vwap(Vwap),
 }
 
 impl LensInstance {
@@ -325,6 +406,8 @@ impl LensInstance {
                 bracket_ns,
                 ib_brackets,
             } => LensInstance::Tpo(Tpo::new(bracket_ns, ib_brackets)),
+            LensKind::TradeCount => LensInstance::TradeCount(TradeCount::new()),
+            LensKind::Vwap => LensInstance::Vwap(Vwap::new()),
         }
     }
 
@@ -334,6 +417,8 @@ impl LensInstance {
             LensInstance::VolumeProfile(c) => c.on_trade(t),
             LensInstance::Delta(c) => c.on_trade(t),
             LensInstance::Tpo(c) => c.on_trade(t),
+            LensInstance::TradeCount(c) => c.on_trade(t),
+            LensInstance::Vwap(c) => c.on_trade(t),
         }
     }
 
@@ -358,6 +443,16 @@ impl LensInstance {
             LensInstance::Tpo(c) => {
                 c.on_close();
                 of.tpo = Some(c.clone());
+                None
+            }
+            LensInstance::TradeCount(c) => {
+                c.on_close();
+                of.trade_count = Some(c.pair());
+                None
+            }
+            LensInstance::Vwap(c) => {
+                c.on_close();
+                of.vwap = c.value();
                 None
             }
         }
@@ -460,6 +555,46 @@ mod tests {
         assert_eq!(cvd.push_bar_delta(-2), -2);
         assert_eq!(cvd.push_bar_delta(5), 3);
         assert_eq!(cvd.value(), 3);
+    }
+
+    // UC-T5-7 : TradeCount (buy/sell, Unknown ignoré).
+    #[test]
+    fn trade_count_buy_sell_unknown() {
+        let mut tc = TradeCount::new();
+        feed(
+            &mut tc,
+            &[
+                t(100, 3, AggressorSide::Buy),
+                t(101, 1, AggressorSide::Buy),
+                t(100, 5, AggressorSide::Sell),
+                t(100, 9, AggressorSide::Unknown), // ignoré
+            ],
+        );
+        assert_eq!(tc.pair(), (2, 1));
+        assert_eq!(tc.total(), 3); // Unknown non compté
+    }
+
+    // UC-T5-8 : VWAP = Σ(price·size)/Σ size, tous trades, cohérent avec [low, high].
+    #[test]
+    fn vwap_value_all_trades() {
+        let mut v = Vwap::new();
+        // (100·2 + 110·3 + 105·5) / (2+3+5) = (200+330+525)/10 = 1055/10 = 105.5
+        feed(
+            &mut v,
+            &[
+                t(100, 2, AggressorSide::Buy),
+                t(110, 3, AggressorSide::Sell),
+                t(105, 5, AggressorSide::Unknown), // inclus (côté-agnostique)
+            ],
+        );
+        let vwap = v.value().unwrap();
+        assert!((vwap - 105.5).abs() < 1e-9);
+        assert!((100.0..=110.0).contains(&vwap), "VWAP ∈ [low, high]");
+    }
+
+    #[test]
+    fn vwap_empty_is_none() {
+        assert_eq!(Vwap::new().value(), None);
     }
 
     // UC-T3-5..8 : TPO / Market Profile.

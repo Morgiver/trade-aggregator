@@ -105,6 +105,33 @@ fn tpo_lens_attached_to_bar() {
     assert!(tpo.poc().is_some());
 }
 
+// UC-T5-7/8 (intégration) : TradeCount + VWAP activés via LensKind, attachés à la barre.
+#[test]
+fn trade_count_and_vwap_lenses_attached() {
+    let rec = Recorder(Rc::new(RefCell::new(Vec::new())));
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_period_and_lenses(
+            Box::new(TimePeriod::new(100)),
+            vec![LensKind::TradeCount, LensKind::Vwap],
+        )
+        .build()
+        .unwrap();
+    agg.subscribe(Box::new(rec.clone()));
+
+    // Barre [0,100) : Buy@100×2, Sell@110×3, Unknown@105×5.
+    agg.process(&trade(0, 100, 2, AggressorSide::Buy));
+    agg.process(&trade(10, 110, 3, AggressorSide::Sell));
+    agg.process(&trade(50, 105, 5, AggressorSide::Unknown));
+    agg.finish();
+
+    let bars = rec.0.borrow();
+    assert_eq!(bars.len(), 1);
+    let of = &bars[0].orderflow;
+    assert_eq!(of.trade_count, Some((1, 1)), "Unknown non compté");
+    // VWAP = (200 + 330 + 525) / 10 = 105.5.
+    assert!((of.vwap.unwrap() - 105.5).abs() < 1e-9);
+}
+
 #[test]
 fn no_lenses_means_empty_orderflow() {
     let rec = Recorder(Rc::new(RefCell::new(Vec::new())));
