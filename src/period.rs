@@ -369,6 +369,71 @@ impl Period for RenkoPeriod {
     }
 }
 
+/// Barres **Renko sur grille de briques** (issue #21, raffinement de `RenkoPeriod`).
+///
+/// La référence est **alignée sur une grille** de niveaux multiples de `brick` (et non sur
+/// le prix d'ouverture arbitraire de la barre) → bornes de briques **déterministes**,
+/// indépendantes de l'endroit où le flux démarre. Une barre se ferme quand le prix s'écarte
+/// d'au moins `brick` de la référence ; la nouvelle référence est **re-snappée sur la
+/// grille**, ce qui gère proprement les **sauts multi-briques** (un trade franchissant
+/// plusieurs briques d'un coup atterrit sur le bon niveau de grille).
+///
+/// **Borne d'excursion explicite** : au sein d'une barre, `|price − reference| < brick`,
+/// donc l'amplitude des prix est bornée par `excursion_bound() = 2·brick − 1` (corps +
+/// mèche max) → **largeur de footprint fixe garantie** (cf. `Footprint::window`).
+pub struct RenkoBrickPeriod {
+    brick: i64,
+    reference: Px,
+    open: bool,
+}
+
+impl RenkoBrickPeriod {
+    pub fn new(brick: i64) -> Self {
+        assert!(brick > 0, "brick doit être > 0");
+        RenkoBrickPeriod {
+            brick,
+            reference: 0,
+            open: false,
+        }
+    }
+
+    /// Niveau de grille (multiple de `brick`) au plus près sous `price`.
+    fn snap(&self, price: Px) -> Px {
+        price.div_euclid(self.brick) * self.brick
+    }
+
+    /// Référence de grille courante (multiple de `brick`).
+    pub fn reference(&self) -> Px {
+        self.reference
+    }
+
+    /// Borne d'excursion des prix d'une barre : `2·brick − 1` (corps + mèche max).
+    pub fn excursion_bound(&self) -> i64 {
+        2 * self.brick - 1
+    }
+}
+
+impl Period for RenkoBrickPeriod {
+    fn on_trade(&mut self, t: &Trade) -> Boundary {
+        if !self.open || (t.price - self.reference).abs() >= self.brick {
+            self.open = true;
+            // Re-snappe sur la grille → sauts multi-briques gérés proprement.
+            self.reference = self.snap(t.price);
+            Boundary::CloseAndOpen {
+                start: t.ts,
+                end: t.ts,
+                partial: false,
+            }
+        } else {
+            Boundary::Continue
+        }
+    }
+
+    fn label(&self) -> String {
+        format!("renko-grid:{}", self.brick)
+    }
+}
+
 /// Borne « decide-before-add » pour les périodes à seuil signé : ferme si la barre
 /// courante a déjà atteint le seuil, sinon continue.
 macro_rules! threshold_boundary {
@@ -707,6 +772,23 @@ mod tests {
         assert!(!closes(p.on_trade(&trv(1, 105, 1)))); // |+5| < 10
         assert!(closes(p.on_trade(&trv(2, 110, 1)))); // |+10| ≥ 10 → nouvelle brique
         assert!(closes(p.on_trade(&trv(3, 100, 1)))); // |−10| ≥ 10 → nouvelle brique
+    }
+
+    // UC-T5-11 : Renko grille — référence alignée + sauts multi-briques + borne d'excursion.
+    #[test]
+    fn renko_brick_grid_aligned_and_multibrick() {
+        let mut p = RenkoBrickPeriod::new(10);
+        // Ouverture : prix 103 → référence snappée sur la grille = 100.
+        assert!(closes(p.on_trade(&trv(0, 103, 1))));
+        assert_eq!(p.reference(), 100);
+        assert!(!closes(p.on_trade(&trv(1, 108, 1)))); // |8| < 10 → continue
+        assert!(!closes(p.on_trade(&trv(2, 95, 1)))); // |−5| < 10 → continue
+        // Saut multi-briques : 134 → ferme, référence re-snappée sur 130.
+        assert!(closes(p.on_trade(&trv(3, 134, 1))));
+        assert_eq!(p.reference(), 130);
+        // Borne d'excursion explicite = 2·brick − 1.
+        assert_eq!(p.excursion_bound(), 19);
+        assert_eq!(p.label(), "renko-grid:10");
     }
 
     fn tside(price: i64, size: u64, side: AggressorSide) -> Trade {

@@ -35,6 +35,6 @@ pub use orderflow::{
 pub use passive::{BookError, LiquidityProfile, MboBook, OrderBook, PassiveAggregator};
 pub use period::{
     AlignedTimePeriod, Boundary, DollarImbalancePeriod, DollarPeriod, Period, PointFigurePeriod,
-    RangePeriod, RenkoPeriod, RunPeriod, TickImbalancePeriod, TickPeriod, TimePeriod,
-    VolumeImbalancePeriod, VolumePeriod,
+    RangePeriod, RenkoBrickPeriod, RenkoPeriod, RunPeriod, TickImbalancePeriod, TickPeriod,
+    TimePeriod, VolumeImbalancePeriod, VolumePeriod,
 };
