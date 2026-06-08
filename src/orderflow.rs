@@ -442,6 +442,40 @@ impl LensInstance {
         }
     }
 
+    /// Variante **lecture-seule** de `snapshot_into` (issue #31) : verse l'état **courant**
+    /// de la lentille dans `of` **sans muter** la lentille ni clôturer la barre. Renvoie le
+    /// delta de la barre courante si c'en est un (pour calculer le CVD courant). Utilisée
+    /// pour interroger l'order flow d'une barre **en formation** — le coût (clones) n'est
+    /// payé qu'à l'appel, donc le hot path reste intact.
+    pub(crate) fn snapshot_ref(&self, of: &mut OrderFlow) -> Option<i64> {
+        match self {
+            LensInstance::Footprint(c) => {
+                of.footprint = Some(c.clone());
+                None
+            }
+            LensInstance::VolumeProfile(c) => {
+                of.volume_profile = Some(c.clone());
+                None
+            }
+            LensInstance::Delta(c) => {
+                of.delta = Some(c.value());
+                Some(c.value())
+            }
+            LensInstance::Tpo(c) => {
+                of.tpo = Some(c.clone());
+                None
+            }
+            LensInstance::TradeCount(c) => {
+                of.trade_count = Some(c.pair());
+                None
+            }
+            LensInstance::Vwap(c) => {
+                of.vwap = c.value();
+                None
+            }
+        }
+    }
+
     /// Verse le résultat de la lentille dans `of` ; renvoie le delta si c'en est un.
     pub(crate) fn snapshot_into(&mut self, of: &mut OrderFlow) -> Option<i64> {
         match self {
