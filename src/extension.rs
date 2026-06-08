@@ -7,11 +7,24 @@
 use std::sync::mpsc::Sender;
 
 use crate::bar::Bar;
+use crate::passive::OrderBook;
 
 /// Reçoit les barres. L'implémenteur calcule ce qu'il veut.
 pub trait Subscriber {
     /// Appelé quand une barre se ferme (fiche `EXT-1`).
     fn on_bar_close(&mut self, period: &str, bar: &Bar);
+
+    /// Variante de `on_bar_close` recevant aussi le **carnet** échantillonné au `ts` de
+    /// clôture de la barre (fiche `EXT-7`, issue #18) — `None` si le côté passif est
+    /// inactif. Permet d'aligner les scalaires passifs (top-of-book, depth) sur la barre
+    /// agressive plutôt que sur une fenêtre passive indépendante.
+    ///
+    /// Par défaut : délègue à `on_bar_close` (rétro-compatible — un abonné qui n'a besoin
+    /// que de la barre n'implémente que `on_bar_close`). On expose le carnet **brut** ;
+    /// microprice/imbalance restent au consommateur (non-goal).
+    fn on_bar_close_with_book(&mut self, period: &str, bar: &Bar, _book: Option<&OrderBook>) {
+        self.on_bar_close(period, bar);
+    }
 
     /// Appelé à chaque trade intégré dans la barre **en formation** (fiches `EXT-2`/`AGG-B3`).
     ///
