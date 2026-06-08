@@ -188,3 +188,60 @@ fn replay_merged_trades_and_mbp10_if_available() {
         first.0, first.2, first.3
     );
 }
+
+// UC-T5-10 : helper DX `replay_to_bars` équivalent au câblage ChannelSink manuel.
+#[test]
+fn replay_to_bars_matches_manual_wiring_if_available() {
+    use std::sync::mpsc::channel;
+    use trade_aggregator::ChannelSink;
+    use trade_aggregator::databento::replay_to_bars;
+
+    let Ok(root) = env::var("TRADE_AGG_DATA_DIR") else {
+        eprintln!("SKIP: TRADE_AGG_DATA_DIR non défini");
+        return;
+    };
+    let symbol = env::var("TRADE_AGG_SYMBOL").unwrap_or_else(|_| "NQ".to_string());
+    let dir = PathBuf::from(&root).join(&symbol).join("trades");
+    let Some(file) = fs::read_dir(&dir).ok().and_then(|rd| {
+        rd.filter_map(|e| e.ok().map(|e| e.path()))
+            .filter(|p| p.to_string_lossy().ends_with(".trades.dbn.zst"))
+            .min()
+    }) else {
+        eprintln!("SKIP: aucun *.trades.dbn.zst dans {}", dir.display());
+        return;
+    };
+    let instrument_id = first_instrument_id(&file)
+        .expect("lecture DBN")
+        .expect("au moins un trade");
+
+    let build = || {
+        SymbolAggregator::builder(
+            Instrument {
+                id: instrument_id,
+                tick_size: 1,
+            },
+            Granularity::L1,
+        )
+        .with_time_period(60_000_000_000)
+        .build()
+        .unwrap()
+    };
+
+    // Câblage manuel : ChannelSink + drain.
+    let mut manual = build();
+    let (tx, rx) = channel();
+    manual.subscribe(Box::new(ChannelSink::new(tx)));
+    replay_trades_file(&file, &mut manual, Some(200_000)).expect("replay manuel");
+    drop(manual);
+    let manual_bars: Vec<Bar> = rx.into_iter().map(|(_, b)| b).collect();
+
+    // Helper.
+    let helper_bars = replay_to_bars(&file, build(), Some(200_000)).expect("replay_to_bars");
+
+    assert!(!helper_bars.is_empty(), "des barres doivent être produites");
+    assert_eq!(
+        helper_bars, manual_bars,
+        "replay_to_bars == câblage ChannelSink manuel"
+    );
+    eprintln!("OK replay_to_bars: {} barres", helper_bars.len());
+}

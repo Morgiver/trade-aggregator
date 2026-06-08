@@ -51,3 +51,13 @@ Nœud d'archi : `aggressor/orderflow`.
 | ID | Comportement | Critères d'acceptation | Tests |
 |----|--------------|------------------------|-------|
 | **UC-T5-9** | `Footprint::window(anchor, tick_size, half_width)` matérialise une fenêtre fixe indexée par offset de tick. | longueur = `2*half_width + 1` ; ancre à l'indice `half_width` ; cellules absentes = `(0,0)` ; débordements gérés ; aucune perte si `half_width` couvre une période bornée. | `orderflow.rs::footprint_window_fixed_width_and_offset`, `::footprint_window_half_width_zero_is_single_cell` |
+
+---
+
+## t5.5 — Helper DX `replay_to_bars` (issue #22)
+
+Nœud d'archi : `databento` (mapping) + `extension`.
+
+| ID | Comportement | Critères d'acceptation | Tests |
+|----|--------------|------------------------|-------|
+| **UC-T5-10** | `replay_to_bars(path, agg, limit)` rejoue un fichier de trades dans un agrégateur déjà configuré et renvoie `Vec<Bar>` (ordre event-time, `finish()` inclus). | équivaut au câblage `ChannelSink` manuel ; derrière la feature `databento`. | `databento_replay.rs::replay_to_bars_matches_manual_wiring_if_available` (réel, gated) |

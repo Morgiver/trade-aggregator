@@ -11,7 +11,9 @@ use std::path::Path;
 use dbn::decode::{DbnDecoder, DecodeRecordRef};
 
 use crate::aggregator::SymbolAggregator;
+use crate::bar::Bar;
 use crate::canonical::{AggressorSide, BookAction, BookSide, BookUpdate, MarketEvent, Trade, Ts};
+use crate::extension::ChannelSink;
 use crate::passive::OrderBook;
 
 /// Convertit le côté DBN (octet `B`/`A`/`N`) en `AggressorSide` (fiche `CAN-11`).
@@ -71,6 +73,31 @@ pub fn replay_trades_file<P: AsRef<Path>>(
     }
     agg.finish();
     Ok(n)
+}
+
+/// Helper **DX** (issue #22) : rejoue un fichier de trades dans un `SymbolAggregator`
+/// **déjà configuré** et **collecte les barres** fermées, dans l'ordre event-time
+/// (`finish()` inclus).
+///
+/// Variante *builder-friendly* (cf. issue) : l'appelant configure période, lentilles,
+/// passif… et a déjà géré l'erreur de configuration (`ConfigError`) au `build()` — ce qui
+/// évite de la mélanger à `dbn::Error`. Câble en interne un `ChannelSink` et draine le
+/// `Receiver` : équivaut au câblage manuel, sans la plomberie répétée.
+///
+/// En présence de **plusieurs périodes**, les barres de toutes les périodes sont
+/// retournées dans leur ordre de clôture (le label de période est ignoré ici ; utiliser
+/// directement un `ChannelSink` si l'on veut discriminer par label).
+pub fn replay_to_bars<P: AsRef<Path>>(
+    path: P,
+    mut agg: SymbolAggregator,
+    limit: Option<usize>,
+) -> Result<Vec<Bar>, dbn::Error> {
+    let (tx, rx) = std::sync::mpsc::channel();
+    agg.subscribe(Box::new(ChannelSink::new(tx)));
+    replay_trades_file(path, &mut agg, limit)?;
+    // Libère le `Sender` détenu par l'agrégateur pour clore l'itération du `Receiver`.
+    drop(agg);
+    Ok(rx.into_iter().map(|(_label, bar)| bar).collect())
 }
 
 /// Reconstruit un `OrderBook` (L2) à partir d'un message **MBP-10** (fiche `CAN-13`).
