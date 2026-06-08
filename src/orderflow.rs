@@ -38,6 +38,26 @@ impl Footprint {
     pub fn iter(&self) -> impl Iterator<Item = (Px, (Qty, Qty))> + '_ {
         self.cells.iter().map(|(&p, &c)| (p, c))
     }
+
+    /// Fenêtre **à largeur fixe** indexée par offset de tick autour d'une ancre (issue #20).
+    ///
+    /// Renvoie `2*half_width + 1` cellules `(buy, sell)`, du prix `anchor - half_width·tick`
+    /// (indice `0`) au prix `anchor + half_width·tick` (dernier indice) ; l'ancre est à
+    /// l'indice `half_width`. Les cellules absentes valent `(0, 0)`.
+    ///
+    /// Matérialise l'indexation par tick **une fois pour toutes** (le crate connaît la
+    /// sémantique des cellules) → évite à chaque consommateur le bug d'« un tick ». Sur une
+    /// période **bornée en prix** (`Range(R)` → `R+1` niveaux, `Renko` → grille bornée),
+    /// un `half_width` couvrant la borne ne perd aucune cellule. On renvoie le **brut** ;
+    /// la normalisation/imbalance reste au consommateur (non-goal).
+    pub fn window(&self, anchor: Px, tick_size: Px, half_width: usize) -> Vec<(Qty, Qty)> {
+        assert!(tick_size > 0, "tick_size doit être > 0");
+        let n = 2 * half_width + 1;
+        let start = anchor - (half_width as i64) * tick_size;
+        (0..n)
+            .map(|i| self.cell(start + (i as i64) * tick_size))
+            .collect()
+    }
 }
 
 impl BarComponent for Footprint {
@@ -495,6 +515,36 @@ mod tests {
         );
         assert_eq!(fp.cell(100), (2, 5));
         assert_eq!(fp.cell(101), (1, 0));
+    }
+
+    // UC-T5-9 : fenêtre footprint à largeur fixe, indexée par offset de tick.
+    #[test]
+    fn footprint_window_fixed_width_and_offset() {
+        let mut fp = Footprint::new();
+        feed(
+            &mut fp,
+            &[
+                t(100, 2, AggressorSide::Buy),
+                t(100, 5, AggressorSide::Sell),
+                t(102, 1, AggressorSide::Buy),
+            ],
+        );
+        // anchor=100, tick=2, half_width=2 → prix 96,98,100,102,104 (5 cellules).
+        let w = fp.window(100, 2, 2);
+        assert_eq!(w.len(), 5, "2*half_width + 1");
+        assert_eq!(w[2], (2, 5), "ancre à l'indice half_width");
+        assert_eq!(w[3], (1, 0), "102");
+        assert_eq!(w[0], (0, 0), "96 absent → (0,0)");
+        assert_eq!(w[1], (0, 0), "98 absent → (0,0)");
+        assert_eq!(w[4], (0, 0), "104 absent → (0,0)");
+    }
+
+    #[test]
+    fn footprint_window_half_width_zero_is_single_cell() {
+        let mut fp = Footprint::new();
+        feed(&mut fp, &[t(100, 3, AggressorSide::Buy)]);
+        assert_eq!(fp.window(100, 1, 0), vec![(3, 0)]);
+        assert_eq!(fp.window(101, 1, 0), vec![(0, 0)]);
     }
 
     // UC-T1-4
