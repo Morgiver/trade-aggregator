@@ -186,17 +186,36 @@ impl SymbolAggregator {
 
     /// Point d'entrée unique — live **et** replay (fiche `SYM-1`).
     pub fn process(&mut self, event: &MarketEvent) {
-        // Détection de désordre temporel (fiche `TR-5`) — on ne rejette pas l'event.
-        let ts = event.ts();
-        match self.last_ts {
-            Some(prev) if ts < prev => self.out_of_order += 1,
-            _ => self.last_ts = Some(ts),
-        }
+        self.note_ts(event.ts());
         match event {
             // Routage : un trade alimente le côté agressif (fiche `SYM-2`).
             MarketEvent::Trade(t) => self.on_trade(t),
             // Routage : un book update alimente le côté passif (fiche `SYM-3`).
             MarketEvent::BookUpdate(b) => self.on_book_update(b),
+        }
+    }
+
+    /// Met à jour la détection de désordre temporel (fiche `TR-5`) — on ne rejette pas
+    /// l'event. Partagé par `process` et `ingest_book_snapshot`.
+    fn note_ts(&mut self, ts: Ts) {
+        match self.last_ts {
+            Some(prev) if ts < prev => self.out_of_order += 1,
+            _ => self.last_ts = Some(ts),
+        }
+    }
+
+    /// Ingère un **snapshot complet** du carnet à l'instant `ts` (fiche `SYM-3` étendue).
+    ///
+    /// Pour les flux par **snapshot** (MBP-10) où chaque message donne l'état du book à
+    /// `t` (et non un delta) : remplace le carnet passif tel quel. Sans effet si le côté
+    /// passif n'est pas actif. N'alimente **pas** le churn des profils de liquidité
+    /// (celui-ci exige des deltas MBO) ; sert à garder `book()` synchronisé avec le tape
+    /// pour l'échantillonnage par barre (cf. `on_bar_close_with_book`). Filtrage par
+    /// instrument à la charge de l'appelant.
+    pub fn ingest_book_snapshot(&mut self, ts: Ts, book: OrderBook) {
+        self.note_ts(ts);
+        if let Some(passive) = &mut self.passive {
+            passive.replace_book(book);
         }
     }
 
