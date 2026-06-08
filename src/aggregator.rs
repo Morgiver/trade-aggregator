@@ -41,6 +41,19 @@ impl Slot {
         }
         of
     }
+
+    /// `OrderFlow` **courant** de la barre en formation, en **lecture seule** (issue #31) :
+    /// snapshot des lentilles vivantes **sans** les muter ni commiter le CVD. Le CVD courant
+    /// = cumul des barres déjà fermées + delta de la barre en cours.
+    fn forming_orderflow(&self) -> OrderFlow {
+        let mut of = OrderFlow::default();
+        for lens in &self.lenses {
+            if let Some(bar_delta) = lens.snapshot_ref(&mut of) {
+                of.cvd = Some(self.cvd.value() + bar_delta);
+            }
+        }
+        of
+    }
 }
 
 /// Constructeur (fiches `SYM-5`/`SYM-6`) avec **fail-fast** sur la granularité.
@@ -232,6 +245,28 @@ impl SymbolAggregator {
     /// Carnet courant, si le côté passif est actif (fiche `EXT-6` — état interrogeable).
     pub fn book(&self) -> Option<&OrderBook> {
         self.passive.as_ref().map(|p| p.book())
+    }
+
+    /// Order flow **courant** de la barre en formation d'un frame (issue #31), sans la
+    /// clôturer ni muter l'état (`&self`). `None` si le label est inconnu ou si aucune barre
+    /// n'est ouverte. Reflète **tous les trades depuis l'ouverture** de la barre courante ;
+    /// cohérent avec l'`OrderFlow` produit à la clôture si appelé juste avant. Le coût
+    /// (snapshot) n'est payé qu'à l'appel → hot path inchangé.
+    pub fn forming_orderflow(&self, period_label: &str) -> Option<OrderFlow> {
+        let slot = self.slots.iter().find(|s| s.label == period_label)?;
+        slot.current.as_ref()?;
+        Some(slot.forming_orderflow())
+    }
+
+    /// Barre **en formation** complète d'un frame (issue #31) : `OHLCV` courant + order flow
+    /// courant, marquée `partial` (incomplète par nature). `None` si label inconnu / pas de
+    /// barre ouverte.
+    pub fn forming_bar(&self, period_label: &str) -> Option<Bar> {
+        let slot = self.slots.iter().find(|s| s.label == period_label)?;
+        let mut bar = slot.current.clone()?;
+        bar.orderflow = slot.forming_orderflow();
+        bar.partial = true;
+        Some(bar)
     }
 
     fn on_trade(&mut self, t: &Trade) {
