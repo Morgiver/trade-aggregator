@@ -1,6 +1,6 @@
 # trade-aggregator
 
-> Crate **Rust** d'agrégation de données de marché — version **0.1.0**.
+> Crate **Rust** d'agrégation de données de marché — version **0.2.0**.
 
 Transforme un flux de données de marché brutes (tape + carnet) en **données agrégées
 riches** — order flow agressif et profils de liquidité passifs — en **temps réel** et en
@@ -10,14 +10,17 @@ elle **n'interprète pas** (pas d'indicateurs, pas de signaux).
 ## Ce qu'elle fait
 
 - **Côté agressif** : périodes variées (time, aligned, tick, volume, dollar, range, renko,
-  **imbalance**, **run**, point & figure) → barres portant l'**order flow** (footprint,
-  delta/CVD, volume profile → POC/Value Area, **TPO/Market Profile**).
+  **renko sur grille**, **imbalance**, **run**, point & figure) → barres portant l'**order
+  flow** (footprint + **fenêtre à largeur fixe**, delta/CVD, **TradeCount**, **VWAP**,
+  volume profile → POC/Value Area, **TPO/Market Profile**).
 - **Côté passif** : reconstruction du **carnet** (L2, et L3→L2 fidèle via `MboBook`) +
   **profils de liquidité** périodiques (pondéré-temps, churn, depth, déséquilibre).
 - **Entrée** : un format canonique unique ; mapping **DataBento** (`dbn` — trades, MBP-10,
-  MBO) isolé derrière la feature `databento`.
-- **Sortie** : point d'extension réactif (`Subscriber` : `on_bar_close` / `on_bar_update`,
-  `ChannelSink`, closures) — branchez vos propres calculs.
+  MBO) isolé derrière la feature `databento`, dont un **replay fusionné event-time**
+  (`replay_merged` : trades + carnet dans un seul agrégateur).
+- **Sortie** : point d'extension réactif (`Subscriber` : `on_bar_close` /
+  `on_bar_close_with_book` (carnet échantillonné à la clôture) / `on_bar_update`,
+  `ChannelSink`, closures, helper `replay_to_bars`) — branchez vos propres calculs.
 
 ## Démarrage
 

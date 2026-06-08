@@ -1,6 +1,6 @@
 [package]
 name = "trade-aggregator"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 description = "Agrégation de trades de marché (order flow agressif & profils de liquidité passifs), temps réel et replay, déterministe."
 license = "MIT OR Apache-2.0"

@@ -3,6 +3,29 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 On consigne les **changements notables** (fin de phase, tranche réalisée, décision/ADR, breaking) — pas chaque commit.
 
+## [0.2.0] — 2026-06-08
+
+**Itération consommateur (tranche T5)** — enrichissements nés du premier vrai consommateur
+du point d'extension (*genetic-trading* : observations par barre, agressif + passif
+synchronisés). Additif & **rétro-compatible**. Non-goals tenus (agrège/expose, n'interprète
+pas). ~58 tests (unit + intégration, dont replay réel gated).
+
+### Added
+- **Replay fusionné event-time** (#17) : `replay_merged(trades, book, agg, limit)` — k-way
+  merge par `ts` de deux fichiers DBN (trades + MBP-10/MBO) dans un **seul**
+  `SymbolAggregator` ; départage déterministe « carnet avant trade ».
+  `SymbolAggregator::ingest_book_snapshot` + `PassiveAggregator::replace_book`.
+- **Snapshot du carnet à la clôture de barre** (#18) :
+  `Subscriber::on_bar_close_with_book(period, bar, book)` — carnet échantillonné au `ts` de
+  clôture (impl par défaut déléguant à `on_bar_close`, rétro-compatible).
+- **Agrégations pures** (#19) : lentilles `TradeCount` (buy/sell) et `Vwap`, activables via
+  `LensKind`, exposées dans `OrderFlow`.
+- **Vue footprint à largeur fixe** (#20) : `Footprint::window(anchor, tick_size, half_width)`
+  → `2·half_width+1` cellules indexées par offset de tick.
+- **Renko sur grille** (#21) : `RenkoBrickPeriod` — briques alignées sur grille, sauts
+  multi-briques, borne d'excursion explicite (`2·brick−1`). `RenkoPeriod` conservé.
+- **Helper DX** (#22) : `replay_to_bars(path, agg, limit) -> Vec<Bar>` (feature `databento`).
+
 ## [0.1.0] — 2026-05-31
 
 Première version fonctionnelle de bout en bout — **roadmap (T0→T4) épuisée**.
