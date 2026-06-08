@@ -41,3 +41,13 @@ Nœud d'archi : `aggressor/orderflow`.
 |----|--------------|------------------------|-------|
 | **UC-T5-7** | Lentille `TradeCount` : `(buy_count, sell_count)` par barre (`Unknown` ignoré, comme `Delta`). | sommes correctes ; `Unknown` non compté ; activable via `LensKind::TradeCount` → `OrderFlow.trade_count`. | `orderflow.rs::trade_count_buy_sell_unknown`, `order_flow_wiring.rs::trade_count_and_vwap_lenses_attached` |
 | **UC-T5-8** | Lentille `Vwap` : `Σ(price·size) / Σ size`, **tous trades** (côté-agnostique). | valeur testée à la main ; ∈ `[low, high]` ; `None` si volume nul ; via `LensKind::Vwap` → `OrderFlow.vwap`. | `orderflow.rs::vwap_value_all_trades`, `::vwap_empty_is_none`, `order_flow_wiring.rs::trade_count_and_vwap_lenses_attached` |
+
+---
+
+## t5.4 — Vue footprint à largeur fixe (issue #20)
+
+Nœud d'archi : `aggressor/orderflow`.
+
+| ID | Comportement | Critères d'acceptation | Tests |
+|----|--------------|------------------------|-------|
+| **UC-T5-9** | `Footprint::window(anchor, tick_size, half_width)` matérialise une fenêtre fixe indexée par offset de tick. | longueur = `2*half_width + 1` ; ancre à l'indice `half_width` ; cellules absentes = `(0,0)` ; débordements gérés ; aucune perte si `half_width` couvre une période bornée. | `orderflow.rs::footprint_window_fixed_width_and_offset`, `::footprint_window_half_width_zero_is_single_cell` |
