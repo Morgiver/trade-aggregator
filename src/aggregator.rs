@@ -3,6 +3,8 @@
 //! Route les `MarketEvent` vers les périodes, fan-out, compose les lentilles order flow,
 //! ferme les barres et notifie les abonnés. Déterministe (event-time). T0 : côté agressif.
 
+use std::collections::VecDeque;
+
 use crate::bar::Bar;
 use crate::canonical::{BookUpdate, Granularity, Instrument, MarketEvent, Trade, Ts};
 use crate::error::ConfigError;
@@ -21,6 +23,11 @@ struct Slot {
     /// État inter-barres du cumulative delta (alimenté si une lentille `Delta` est active).
     cvd: Cvd,
     current: Option<Bar>,
+    /// Historique FIFO borné des dernières barres fermées (issue #32) — `None` si désactivé
+    /// (opt-in : aucune rétention par défaut).
+    history: Option<VecDeque<Bar>>,
+    /// Profondeur max de l'historique (0 = désactivé).
+    history_depth: usize,
 }
 
 impl Slot {
@@ -42,6 +49,17 @@ impl Slot {
         of
     }
 
+    /// Pousse une barre fermée dans l'historique FIFO borné (issue #32). Sans effet si
+    /// l'historique est désactivé. La plus ancienne tombe quand la profondeur est atteinte.
+    fn push_history(&mut self, bar: &Bar) {
+        if let Some(h) = self.history.as_mut() {
+            if h.len() == self.history_depth {
+                h.pop_front();
+            }
+            h.push_back(bar.clone());
+        }
+    }
+
     /// `OrderFlow` **courant** de la barre en formation, en **lecture seule** (issue #31) :
     /// snapshot des lentilles vivantes **sans** les muter ni commiter le CVD. Le CVD courant
     /// = cumul des barres déjà fermées + delta de la barre en cours.
@@ -56,13 +74,32 @@ impl Slot {
     }
 }
 
+/// État d'un frame au tick courant (issue #32) : `[X dernières barres fermées] + [barre en
+/// formation]`. Renvoyé par `SymbolAggregator::snapshot`.
+#[derive(Debug, Clone, PartialEq)]
+pub struct FrameSnapshot {
+    /// Libellé de la période (cf. `Period::label`).
+    pub label: String,
+    /// Barres fermées retenues, de la plus ancienne à la plus récente (`≤ depth`). Vide si
+    /// l'historique n'est pas activé pour ce frame.
+    pub closed: Vec<Bar>,
+    /// Barre en formation (OHLCV + order flow courants), `None` si aucune barre ouverte.
+    pub forming: Option<Bar>,
+}
+
+/// Spécification d'une période au builder : `(période, lentilles, profondeur d'historique
+/// override)` — `None` → profondeur globale.
+type PeriodSpec = (Box<dyn Period>, Vec<LensKind>, Option<usize>);
+
 /// Constructeur (fiches `SYM-5`/`SYM-6`) avec **fail-fast** sur la granularité.
 pub struct Builder {
     instrument: Instrument,
     granularity: Granularity,
-    specs: Vec<(Box<dyn Period>, Vec<LensKind>)>,
+    specs: Vec<PeriodSpec>,
     passive: bool,
     passive_window: Option<i64>,
+    /// Profondeur d'historique appliquée par défaut à toutes les périodes (issue #32).
+    default_history_depth: usize,
 }
 
 impl Builder {
@@ -77,7 +114,27 @@ impl Builder {
         period: Box<dyn Period>,
         lenses: Vec<LensKind>,
     ) -> Self {
-        self.specs.push((period, lenses));
+        self.specs.push((period, lenses, None));
+        self
+    }
+
+    /// Historique FIFO global (issue #32) : retient les `depth` dernières barres fermées de
+    /// **chaque** période (sauf override par période). Opt-in : sans cet appel, aucune
+    /// rétention (empreinte mémoire inchangée). `depth = 0` désactive.
+    pub fn with_history(mut self, depth: usize) -> Self {
+        self.default_history_depth = depth;
+        self
+    }
+
+    /// Ajoute une période avec lentilles **et** une profondeur d'historique propre (issue
+    /// #32), prioritaire sur la profondeur globale.
+    pub fn with_period_lenses_history(
+        mut self,
+        period: Box<dyn Period>,
+        lenses: Vec<LensKind>,
+        depth: usize,
+    ) -> Self {
+        self.specs.push((period, lenses, Some(depth)));
         self
     }
 
@@ -106,7 +163,7 @@ impl Builder {
     /// Échoue (fiches `SYM-8`/`CAN-7`/`TR-6`) si une période exige une granularité
     /// supérieure à celle déclarée.
     pub fn build(self) -> Result<SymbolAggregator, ConfigError> {
-        for (p, _) in &self.specs {
+        for (p, _, _) in &self.specs {
             let required = p.min_granularity();
             if required > self.granularity {
                 return Err(ConfigError::IncompatibleGranularity {
@@ -122,11 +179,13 @@ impl Builder {
                 declared: self.granularity,
             });
         }
+        let default_depth = self.default_history_depth;
         let slots = self
             .specs
             .into_iter()
-            .map(|(p, lens_kinds)| {
+            .map(|(p, lens_kinds, depth_override)| {
                 let label = p.label();
+                let depth = depth_override.unwrap_or(default_depth);
                 Slot {
                     period: p,
                     label,
@@ -134,6 +193,8 @@ impl Builder {
                     lenses: Vec::new(),
                     cvd: Cvd::new(),
                     current: None,
+                    history: (depth > 0).then(|| VecDeque::with_capacity(depth)),
+                    history_depth: depth,
                 }
             })
             .collect();
@@ -174,6 +235,7 @@ impl SymbolAggregator {
             specs: Vec::new(),
             passive: false,
             passive_window: None,
+            default_history_depth: 0,
         }
     }
 
@@ -300,6 +362,8 @@ impl SymbolAggregator {
                         // Carnet échantillonné au ts de clôture (fiche `EXT-7`, #18).
                         let book = self.passive.as_ref().map(|p| p.book());
                         notify(&mut self.subscribers, &slot.label, &bar, book);
+                        // Rétention FIFO de la barre fermée (issue #32).
+                        slot.push_history(&bar);
                     }
                     // Ouvre la nouvelle barre et ses lentilles fraîches.
                     slot.lenses = slot.fresh_lenses();
@@ -326,11 +390,42 @@ impl SymbolAggregator {
                 bar.orderflow = of;
                 let book = self.passive.as_ref().map(|p| p.book());
                 notify(&mut self.subscribers, &slot.label, &bar, book);
+                slot.push_history(&bar);
             }
         }
         if let Some(passive) = &mut self.passive {
             passive.finish();
         }
+    }
+
+    /// Historique FIFO des dernières barres fermées d'un frame (issue #32), de la plus
+    /// ancienne à la plus récente. `None` si le label est inconnu ou si l'historique n'a pas
+    /// été activé (`with_history` / `with_period_lenses_history`).
+    pub fn history(&self, period_label: &str) -> Option<&VecDeque<Bar>> {
+        self.slots
+            .iter()
+            .find(|s| s.label == period_label)?
+            .history
+            .as_ref()
+    }
+
+    /// **Screenshot** complet de tous les frames à l'instant courant (issue #32) : par
+    /// période, les `≤ X` dernières barres fermées (historique FIFO) + la barre en formation
+    /// (avec son order flow courant). Les frames sans historique ont `closed` vide ; les
+    /// frames sans barre ouverte ont `forming = None`.
+    pub fn snapshot(&self) -> Vec<FrameSnapshot> {
+        self.slots
+            .iter()
+            .map(|s| FrameSnapshot {
+                label: s.label.clone(),
+                closed: s
+                    .history
+                    .as_ref()
+                    .map(|h| h.iter().cloned().collect())
+                    .unwrap_or_default(),
+                forming: self.forming_bar(&s.label),
+            })
+            .collect()
     }
 
     /// Récupère et vide les profils de liquidité fermés (fiches `LP-*`/`EXT-6`).
