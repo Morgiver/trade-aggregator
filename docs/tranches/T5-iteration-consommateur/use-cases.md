@@ -61,3 +61,14 @@ Nœud d'archi : `databento` (mapping) + `extension`.
 | ID | Comportement | Critères d'acceptation | Tests |
 |----|--------------|------------------------|-------|
 | **UC-T5-10** | `replay_to_bars(path, agg, limit)` rejoue un fichier de trades dans un agrégateur déjà configuré et renvoie `Vec<Bar>` (ordre event-time, `finish()` inclus). | équivaut au câblage `ChannelSink` manuel ; derrière la feature `databento`. | `databento_replay.rs::replay_to_bars_matches_manual_wiring_if_available` (réel, gated) |
+
+---
+
+## t5.6 — Renko « corps + mèche bornée » sur grille (issue #21)
+
+Nœud d'archi : `aggressor/` (`AGG-P8` raffiné). `RenkoPeriod` (simplifiée) **conservé**
+(rétro-compat) ; `RenkoBrickPeriod` ajouté.
+
+| ID | Comportement | Critères d'acceptation | Tests |
+|----|--------------|------------------------|-------|
+| **UC-T5-11** | `RenkoBrickPeriod` : briques alignées sur une **grille** (référence = multiple de `brick`), sauts **multi-briques** re-snappés sur grille, **borne d'excursion** explicite `2·brick−1`. | référence snappée déterministe ; saut multi-briques correct (gap) ; `excursion_bound()` testé → largeur footprint fixe garantie ; rétro-compat (`RenkoPeriod` conservé). | `period.rs::renko_brick_grid_aligned_and_multibrick` |
