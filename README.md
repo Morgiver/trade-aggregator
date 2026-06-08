@@ -1,6 +1,6 @@
 # trade-aggregator
 
-> Crate **Rust** d'agrégation de données de marché — version **0.2.0**.
+> Crate **Rust** d'agrégation de données de marché — version **0.3.0**.
 
 Transforme un flux de données de marché brutes (tape + carnet) en **données agrégées
 riches** — order flow agressif et profils de liquidité passifs — en **temps réel** et en
@@ -21,6 +21,10 @@ elle **n'interprète pas** (pas d'indicateurs, pas de signaux).
 - **Sortie** : point d'extension réactif (`Subscriber` : `on_bar_close` /
   `on_bar_close_with_book` (carnet échantillonné à la clôture) / `on_bar_update`,
   `ChannelSink`, closures, helper `replay_to_bars`) — branchez vos propres calculs.
+- **Interrogation à la demande** (primitif *screenshot* tick-by-tick) : order flow de la
+  barre **en formation** (`forming_orderflow` / `forming_bar`), **historique FIFO** opt-in
+  des X dernières barres fermées par frame (`with_history`), et `snapshot()` de l'état
+  multi-frame complet (`[≤X fermées] + [en formation]`).
 
 ## Démarrage
 

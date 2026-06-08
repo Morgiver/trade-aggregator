@@ -3,6 +3,25 @@
 Format inspiré de [Keep a Changelog](https://keepachangelog.com/fr/1.1.0/).
 On consigne les **changements notables** (fin de phase, tranche réalisée, décision/ADR, breaking) — pas chaque commit.
 
+## [0.3.0] — 2026-06-08
+
+**Primitif « screenshot » (tranche T6)** — exposer l'état multi-frame complet au **tick
+courant** pour des observations ML tick-by-tick (*genetic-trading*). Additif &
+**rétro-compatible**. Non-goal tenu (on n'expose que de l'état déjà calculé). Invariants :
+coût **à la demande** (hot path inchangé) ; historique **opt-in** (empreinte mémoire
+inchangée par défaut).
+
+### Added
+- **Order flow d'une barre en formation** (#31) :
+  `SymbolAggregator::forming_orderflow(label)` / `forming_bar(label)` — snapshot
+  **lecture-seule** (`&self`) des lentilles vivantes (footprint, delta, CVD courant,
+  TradeCount, VWAP) sans clôturer la barre ; CVD courant = cumul fermées + delta courant.
+- **Historique FIFO + screenshot** (#32) : ring buffer borné **opt-in** des dernières barres
+  fermées par période (`Builder::with_history(depth)` /
+  `with_period_lenses_history(period, lenses, depth)`) ;
+  `SymbolAggregator::history(label)` ; `snapshot() -> Vec<FrameSnapshot>`
+  (`[≤X fermées] + [barre en formation]` par frame).
+
 ## [0.2.0] — 2026-06-08
 
 **Itération consommateur (tranche T5)** — enrichissements nés du premier vrai consommateur
