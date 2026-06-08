@@ -30,3 +30,14 @@ Nœud d'archi : `extension.md` (`EXT-7`) + `symbol-aggregator`.
 |----|--------------|------------------------|-------|
 | **UC-T5-5** | `Subscriber::on_bar_close_with_book(period, bar, book)` reçoit le carnet échantillonné **au ts de clôture** de la barre. | book = état passif au moment du trade qui ferme la barre (dernier snapshot/MAJ ≤ ce ts) ; `None` si passif inactif. | `merged_t5.rs::book_snapshot_at_bar_close` |
 | **UC-T5-6** | Rétro-compatibilité : un abonné n'implémentant que `on_bar_close` reçoit toujours ses clôtures (délégation par défaut), même passif actif. | l'abonné « legacy » compile et reçoit toutes les clôtures. | `merged_t5.rs::legacy_subscriber_still_receives_closes_with_passive` |
+
+---
+
+## t5.3 — Agrégations pures : TradeCount + VWAP (issue #19)
+
+Nœud d'archi : `aggressor/orderflow`.
+
+| ID | Comportement | Critères d'acceptation | Tests |
+|----|--------------|------------------------|-------|
+| **UC-T5-7** | Lentille `TradeCount` : `(buy_count, sell_count)` par barre (`Unknown` ignoré, comme `Delta`). | sommes correctes ; `Unknown` non compté ; activable via `LensKind::TradeCount` → `OrderFlow.trade_count`. | `orderflow.rs::trade_count_buy_sell_unknown`, `order_flow_wiring.rs::trade_count_and_vwap_lenses_attached` |
+| **UC-T5-8** | Lentille `Vwap` : `Σ(price·size) / Σ size`, **tous trades** (côté-agnostique). | valeur testée à la main ; ∈ `[low, high]` ; `None` si volume nul ; via `LensKind::Vwap` → `OrderFlow.vwap`. | `orderflow.rs::vwap_value_all_trades`, `::vwap_empty_is_none`, `order_flow_wiring.rs::trade_count_and_vwap_lenses_attached` |
