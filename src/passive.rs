@@ -329,6 +329,12 @@ impl PassiveAggregator {
     pub fn book(&self) -> &OrderBook {
         &self.book
     }
+
+    /// Remplace le carnet par un snapshot complet (flux MBP par niveaux). Ne touche pas à
+    /// la comptabilité de churn des fenêtres (un snapshot n'observe pas les deltas).
+    pub fn replace_book(&mut self, book: OrderBook) {
+        self.book = book;
+    }
 }
 
 /// Reconstruction **L3 fidèle** (market-by-order) dérivant un `OrderBook` L2 (fiche

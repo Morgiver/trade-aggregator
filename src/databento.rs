@@ -11,7 +11,7 @@ use std::path::Path;
 use dbn::decode::{DbnDecoder, DecodeRecordRef};
 
 use crate::aggregator::SymbolAggregator;
-use crate::canonical::{AggressorSide, BookAction, BookSide, BookUpdate, MarketEvent, Trade};
+use crate::canonical::{AggressorSide, BookAction, BookSide, BookUpdate, MarketEvent, Trade, Ts};
 use crate::passive::OrderBook;
 
 /// Convertit le côté DBN (octet `B`/`A`/`N`) en `AggressorSide` (fiche `CAN-11`).
@@ -149,6 +149,125 @@ pub fn replay_mbp10_file<P: AsRef<Path>>(
         }
     }
     Ok((n, crossed))
+}
+
+/// Élément de carnet dans un flux fusionné : **delta** MBO ou **snapshot** MBP-10
+/// (fiche `UC-T5-1`). Permet d'unifier les deux schémas de carnet sous un seul `ts`.
+enum BookItem {
+    Update(BookUpdate),
+    Snapshot { ts: Ts, book: OrderBook },
+}
+
+impl BookItem {
+    fn ts(&self) -> Ts {
+        match self {
+            BookItem::Update(u) => u.ts,
+            BookItem::Snapshot { ts, .. } => *ts,
+        }
+    }
+}
+
+/// Prochain trade de `instrument_id` dans le flux (saute les autres échéances).
+fn next_trade<D: DecodeRecordRef>(
+    decoder: &mut D,
+    instrument_id: u32,
+) -> Result<Option<Trade>, dbn::Error> {
+    while let Some(rec) = decoder.decode_record_ref()? {
+        if let Some(t) = rec.get::<dbn::TradeMsg>() {
+            if t.hd.instrument_id != instrument_id {
+                continue;
+            }
+            return Ok(Some(trade_from_dbn(t)));
+        }
+    }
+    Ok(None)
+}
+
+/// Prochain élément de carnet de `instrument_id` : `Mbp10Msg` → snapshot, `MboMsg` →
+/// delta. Saute les autres échéances et les actions MBO non liées au book.
+fn next_book_item<D: DecodeRecordRef>(
+    decoder: &mut D,
+    instrument_id: u32,
+) -> Result<Option<BookItem>, dbn::Error> {
+    while let Some(rec) = decoder.decode_record_ref()? {
+        if let Some(m) = rec.get::<dbn::Mbp10Msg>() {
+            if m.hd.instrument_id != instrument_id {
+                continue;
+            }
+            return Ok(Some(BookItem::Snapshot {
+                ts: m.hd.ts_event as i64,
+                book: book_from_mbp10(m),
+            }));
+        }
+        if let Some(mb) = rec.get::<dbn::MboMsg>() {
+            if mb.hd.instrument_id != instrument_id {
+                continue;
+            }
+            if let Some(bu) = book_update_from_mbo(mb) {
+                return Ok(Some(BookItem::Update(bu)));
+            }
+            // Action MBO non liée au maintien du book (T/F/R/N) → élément suivant.
+        }
+    }
+    Ok(None)
+}
+
+fn apply_book_item(agg: &mut SymbolAggregator, item: BookItem) {
+    match item {
+        BookItem::Update(u) => agg.process(&MarketEvent::BookUpdate(u)),
+        BookItem::Snapshot { ts, book } => agg.ingest_book_snapshot(ts, book),
+    }
+}
+
+/// Rejoue **en flux fusionné event-time** un fichier de trades et un fichier de carnet
+/// (MBP-10 **ou** MBO) dans un **seul** `SymbolAggregator` (fiches `UC-T5-1..4`).
+///
+/// k-way merge (k=2) par `ts` croissant. **Départage déterministe** à `ts` égal :
+/// l'événement **carnet est appliqué avant le trade** (`b.ts() <= t.ts`). À toute clôture
+/// de barre déclenchée par un trade à `t`, `agg.book()` reflète donc les mises à jour de
+/// carnet jusqu'à `t` inclus.
+///
+/// Les snapshots MBP-10 sont ingérés via `ingest_book_snapshot`, les deltas MBO via
+/// `process(BookUpdate)`. Un seul `finish()` est appelé à la fin. Renvoie le nombre
+/// d'événements poussés (trades + carnet) ; `limit` borne ce total.
+pub fn replay_merged<P: AsRef<Path>>(
+    trades: P,
+    book: P,
+    agg: &mut SymbolAggregator,
+    limit: Option<usize>,
+) -> Result<usize, dbn::Error> {
+    let instrument_id = agg.instrument().id;
+    let mut td = DbnDecoder::from_zstd_file(trades)?;
+    let mut bd = DbnDecoder::from_zstd_file(book)?;
+
+    let mut next_t = next_trade(&mut td, instrument_id)?;
+    let mut next_b = next_book_item(&mut bd, instrument_id)?;
+    let mut n = 0usize;
+
+    loop {
+        if let Some(max) = limit
+            && n >= max
+        {
+            break;
+        }
+        // Décide d'abord (emprunts relâchés), agit ensuite (mutations).
+        let take_book = match (&next_t, &next_b) {
+            (None, None) => break,
+            (None, Some(_)) => true,
+            (Some(_), None) => false,
+            (Some(t), Some(b)) => b.ts() <= t.ts, // carnet avant trade à ts égal
+        };
+        if take_book {
+            apply_book_item(agg, next_b.take().unwrap());
+            next_b = next_book_item(&mut bd, instrument_id)?;
+        } else {
+            agg.process(&MarketEvent::Trade(next_t.take().unwrap()));
+            next_t = next_trade(&mut td, instrument_id)?;
+        }
+        n += 1;
+    }
+    agg.finish();
+    Ok(n)
 }
 
 /// Premier `instrument_id` rencontré dans un fichier MBP-10.
