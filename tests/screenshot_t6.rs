@@ -9,7 +9,7 @@ use std::rc::Rc;
 use trade_aggregator::orderflow::LensKind;
 use trade_aggregator::{
     AggressorSide, Bar, Granularity, Instrument, MarketEvent, Subscriber, SymbolAggregator,
-    TimePeriod, Trade,
+    TickPeriod, TimePeriod, Trade,
 };
 
 const INSTR: Instrument = Instrument {
@@ -128,4 +128,107 @@ fn forming_orderflow_multi_frame() {
     assert_eq!(agg.forming_orderflow("time:100ns").unwrap().delta, Some(-1));
     // Frame 1000ns : toujours la 1ʳᵉ barre → delta +2 -1 = +1.
     assert_eq!(agg.forming_orderflow("time:1000ns").unwrap().delta, Some(1));
+}
+
+// ---- Issue #32 : historique FIFO + snapshot() ------------------------------
+
+fn buy(ts: i64, price: i64) -> MarketEvent {
+    trade(ts, price, 1, AggressorSide::Buy)
+}
+
+// UC-T6-4 : opt-in — sans with_history, aucune rétention (history == None).
+#[test]
+fn history_is_opt_in() {
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_time_period(100)
+        .build()
+        .unwrap();
+    agg.process(&buy(0, 100));
+    agg.process(&buy(150, 101)); // ferme la 1ʳᵉ barre
+    assert!(
+        agg.history(LABEL).is_none(),
+        "pas d'historique sans with_history"
+    );
+    // snapshot() expose quand même la barre en formation, closed vide.
+    let snap = agg.snapshot();
+    assert_eq!(snap.len(), 1);
+    assert!(snap[0].closed.is_empty());
+    assert!(snap[0].forming.is_some());
+}
+
+// UC-T6-5 : FIFO borné à depth (la plus ancienne tombe), du plus ancien au plus récent.
+#[test]
+fn history_fifo_bounded_to_depth() {
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_period_lenses_history(Box::new(TickPeriod::new(1)), vec![], 3)
+        .build()
+        .unwrap();
+    // TickPeriod(1) : chaque trade ferme la barre précédente et en ouvre une.
+    for (i, px) in [100, 101, 102, 103, 104].into_iter().enumerate() {
+        agg.process(&buy(i as i64, px));
+    }
+    // 5 barres ouvertes → 4 fermées (la 5ᵉ est en formation). FIFO depth 3 → garde les 3 dernières fermées.
+    let h = agg.history("tick:1").unwrap();
+    let closes: Vec<i64> = h.iter().map(|b| b.ohlcv.close).collect();
+    assert_eq!(
+        closes,
+        vec![101, 102, 103],
+        "3 dernières fermées, plus ancienne→récente"
+    );
+}
+
+// UC-T6-6 : snapshot() = par frame, [≤X fermées] + [barre en formation] ; multi-frames.
+#[test]
+fn snapshot_multi_frame_closed_plus_forming() {
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_history(5) // défaut global
+        .with_period_and_lenses(Box::new(TimePeriod::new(100)), vec![LensKind::Delta])
+        .with_period_and_lenses(Box::new(TimePeriod::new(1000)), vec![LensKind::Delta])
+        .build()
+        .unwrap();
+
+    // Trades sur [0,100), puis un trade @150 ferme la frame 100ns (pas la 1000ns).
+    agg.process(&buy(0, 100));
+    agg.process(&buy(50, 101));
+    agg.process(&buy(150, 102));
+
+    let snap = agg.snapshot();
+    assert_eq!(snap.len(), 2);
+
+    let f100 = snap.iter().find(|f| f.label == "time:100ns").unwrap();
+    assert_eq!(f100.closed.len(), 1, "1 barre fermée sur la frame 100ns");
+    assert_eq!(f100.closed[0].ohlcv.close, 101);
+    assert!(f100.forming.is_some(), "barre en formation présente");
+    assert_eq!(f100.forming.as_ref().unwrap().ohlcv.close, 102);
+
+    let f1000 = snap.iter().find(|f| f.label == "time:1000ns").unwrap();
+    assert!(
+        f1000.closed.is_empty(),
+        "aucune barre fermée sur la frame 1000ns"
+    );
+    assert!(f1000.forming.is_some());
+}
+
+// UC-T6-7 : l'historique est cohérent avec ce que les abonnés ont reçu à la clôture.
+#[test]
+fn history_matches_subscriber_closes() {
+    let rec = Recorder(Rc::new(RefCell::new(Vec::new())));
+    let mut agg = SymbolAggregator::builder(INSTR, Granularity::L1)
+        .with_history(10)
+        .with_period_and_lenses(Box::new(TimePeriod::new(100)), vec![LensKind::Delta])
+        .build()
+        .unwrap();
+    agg.subscribe(Box::new(rec.clone()));
+
+    for i in 0..5 {
+        agg.process(&buy(i * 150, 100 + i));
+    }
+    agg.finish();
+
+    let received = rec.0.borrow();
+    let history: Vec<Bar> = agg.history(LABEL).unwrap().iter().cloned().collect();
+    assert_eq!(
+        history, *received,
+        "historique == barres notifiées aux abonnés"
+    );
 }

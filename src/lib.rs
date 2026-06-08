@@ -23,7 +23,7 @@ pub mod period;
 #[cfg(feature = "databento")]
 pub mod databento;
 
-pub use aggregator::{Builder, SymbolAggregator};
+pub use aggregator::{Builder, FrameSnapshot, SymbolAggregator};
 pub use bar::{Bar, Ohlcv};
 pub use canonical::{AggressorSide, Granularity, Instrument, MarketEvent, Px, Qty, Trade, Ts};
 pub use canonical::{BookAction, BookSide, BookUpdate};
