@@ -262,7 +262,9 @@ impl SymbolAggregator {
                         let of = slot.snapshot_orderflow();
                         let mut bar = slot.current.take().unwrap();
                         bar.orderflow = of;
-                        notify(&mut self.subscribers, &slot.label, &bar);
+                        // Carnet échantillonné au ts de clôture (fiche `EXT-7`, #18).
+                        let book = self.passive.as_ref().map(|p| p.book());
+                        notify(&mut self.subscribers, &slot.label, &bar, book);
                     }
                     // Ouvre la nouvelle barre et ses lentilles fraîches.
                     slot.lenses = slot.fresh_lenses();
@@ -287,7 +289,8 @@ impl SymbolAggregator {
                 let mut bar = slot.current.take().unwrap();
                 bar.partial = true;
                 bar.orderflow = of;
-                notify(&mut self.subscribers, &slot.label, &bar);
+                let book = self.passive.as_ref().map(|p| p.book());
+                notify(&mut self.subscribers, &slot.label, &bar, book);
             }
         }
         if let Some(passive) = &mut self.passive {
@@ -305,9 +308,14 @@ impl SymbolAggregator {
     }
 }
 
-fn notify(subscribers: &mut [Box<dyn Subscriber>], label: &str, bar: &Bar) {
+fn notify(
+    subscribers: &mut [Box<dyn Subscriber>],
+    label: &str,
+    bar: &Bar,
+    book: Option<&OrderBook>,
+) {
     for sub in subscribers.iter_mut() {
-        sub.on_bar_close(label, bar);
+        sub.on_bar_close_with_book(label, bar, book);
     }
 }
 
